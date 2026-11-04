@@ -1,0 +1,9 @@
+# Local recovery tooling and generated test executables are not release inputs.
+tests/recovery/
+tests/*.exe
+out/
+release-audit-backups/
+tests/release-smoke/
+tests/screenshot-fixtures/
+tests/installer-fixtures/
+tests/settings-fixtures/

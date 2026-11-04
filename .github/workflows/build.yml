@@ -1,0 +1,29 @@
+name: Build GTBOOK Essentials
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      GTBOOK_HEADLESS_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Test and package
+        shell: powershell
+        run: .\Build-Release.ps1
+      - name: Check one-file setup without installing
+        shell: powershell
+        run: |
+          $setup = Start-Process -FilePath .\out\GTBOOK-Essentials-Setup.exe -ArgumentList '--check-only' -WindowStyle Hidden -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw 'Setup preflight failed.' }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: GTBOOK-Essentials-windows
+          path: |
+            out/*.exe
+            out/*.zip
+            out/*.sha256
+          if-no-files-found: error

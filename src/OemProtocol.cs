@@ -16,7 +16,7 @@ namespace GTBook {
             scope.Connect();
             using(var q=new ManagementObjectSearcher(scope,new ObjectQuery("SELECT * FROM ACPIMethod")))
             using(var rows=q.Get()) { provider=rows.Cast<ManagementObject>().FirstOrDefault(); }
-            if(provider==null)throw new IOException("OEM ACPIMethod provider not found on this device.");
+            if(provider==null)throw new IOException("The laptop's ACPIMethod firmware interface is unavailable. Run the latest Essentials Setup for a device-support check, or see GitHub docs/DRIVER_SUPPORT.md. The original Control Center app is not required.");
         }
         public static byte[] Buffer(uint command, byte operation, byte value) {
             byte[] b=new byte[24]; b[0]=66;b[1]=89;b[2]=68;b[3]=76;

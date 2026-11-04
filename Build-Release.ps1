@@ -1,6 +1,6 @@
 param([switch]$SkipTests)
 $ErrorActionPreference='Stop'
-$version='2.0.0-rc.7'
+$version='2.0.0-rc.8'
 if(-not $SkipTests){& (Join-Path $PSScriptRoot 'tests\run.ps1');if(-not $?){throw 'Release checks failed.'}}
 & (Join-Path $PSScriptRoot 'tests\release-tools.ps1')
 $out=Join-Path $PSScriptRoot 'out';New-Item -ItemType Directory -Path $out -Force | Out-Null
@@ -8,7 +8,7 @@ $stage=Join-Path $out ('stage-'+[guid]::NewGuid().ToString('N'));New-Item -ItemT
 $name='GTBOOK-Essentials-'+$version+'-win-x64';$binary=Join-Path $stage $name;New-Item -ItemType Directory -Path $binary | Out-Null
 & (Join-Path $PSScriptRoot 'build.ps1') -OutputPath (Join-Path $binary 'GTBook.exe')
 if(-not $?){throw 'Release compilation failed.'}
-foreach($file in @('Install.ps1','Install.bat','Install_With_GPU_Check.bat','Start.ps1','Start.bat','Uninstall.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('release\'+$file)) -Destination $binary}
+foreach($file in @('Install.ps1','DeviceSupport.ps1','Install.bat','Install_With_GPU_Check.bat','Start.ps1','Start.bat','Uninstall.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('release\'+$file)) -Destination $binary}
 New-Item -ItemType Directory -Path (Join-Path $binary 'assets') | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'assets\gtbook-essentials.ico') -Destination (Join-Path $binary 'assets')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs\RELEASE_README.md') -Destination (Join-Path $binary 'README.md')

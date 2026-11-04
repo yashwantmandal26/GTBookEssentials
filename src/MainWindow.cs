@@ -2227,7 +2227,7 @@ namespace GTBook
 			page.Controls.Add(flowLayoutPanel2);
 			var featureCard=Card("Original features, fewer distractions", "Power modes, Fan Max, USB charging, GPU modes, Windows-key lock and native lighting.\nMusic uses your default playback device. Charge-limit controls are not in this GTBook OEM UI.", 138);
             featureCard.Controls.OfType<Label>().Last().Height=68;
-			Card("Driver & startup", "The installer enables administrator-level tray startup at sign-in. Keep the laptop's OEM ACPI driver installed.\nClose other RGB/control utilities before using hardware controls.", 133);
+			Card("Driver & startup", "The installer enables administrator-level tray startup at sign-in. Uses Windows ACPI/WMI and the laptop's firmware interface.\nClose other RGB/control utilities before using hardware controls.", 133);
 		}
 
         private string ConnectionReport(){return string.Join("\r\n",snapshot.Select(kv=>kv.Key+": "+(string.IsNullOrEmpty(kv.Value)?"None":kv.Value)));}

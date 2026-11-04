@@ -5,18 +5,18 @@
 
 A small, offline control center for your Infinix GTBook.
 
-**[Download Setup.exe](https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.0.0-rc.7/GTBOOK-Essentials-Setup.exe)** · [All downloads](https://github.com/yashwantmandal26/GTBookEssentials/releases) · [Report an issue](https://github.com/yashwantmandal26/GTBookEssentials/issues)
+**[Download Setup.exe](https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.0.0-rc.8/GTBOOK-Essentials-Setup.exe)** · [All downloads](https://github.com/yashwantmandal26/GTBookEssentials/releases) · [Report an issue](https://github.com/yashwantmandal26/GTBookEssentials/issues)
 </div>
 
 ## Install in 3 steps
 
 1. Download **GTBOOK-Essentials-Setup.exe** above.
-2. Double-click it and approve Windows administrator consent using your normal Windows account.
+2. Double-click it and approve Windows administrator consent using your normal Windows account. Setup checks device support and guides recovery if needed.
 3. Open **GTBOOK Essentials** from Start. Future Windows sign-ins start it automatically in the tray.
 
 No Python, Node or separate .NET SDK needed. A ZIP + `Install.bat` alternative is available in Releases. Run a newer Setup.exe to update. Uninstall through **Settings → Apps**.
 
-**Requirements:** Windows 10/11 x64, .NET Framework 4.8 and the laptop's OEM ACPI/WMI driver. Reviewed hardware: **INFINIX GL613, BIOS 1.00**. Other models/BIOS versions keep native writes disabled; support is not universal across GTBooks. Keep OEM drivers installed.
+**Requirements:** Windows 10/11 x64, .NET Framework 4.8 and working Windows ACPI/WMI support. Reviewed hardware: **INFINIX GL613, BIOS 1.00**. Other models/BIOS versions keep native writes disabled; support is not universal across GTBooks. The original Control Center app is not required. Setup checks the firmware interface and attempts safe device rediscovery when it is missing. See [fresh Windows / driver recovery](docs/DRIVER_SUPPORT.md) if controls remain unavailable.
 
 ## What it does
 

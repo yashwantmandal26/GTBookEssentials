@@ -51,6 +51,15 @@ try {
         if(-not $path.StartsWith(([IO.Path]::GetFullPath($PSScriptRoot)+[IO.Path]::DirectorySeparatorChar),[StringComparison]::OrdinalIgnoreCase)){throw 'Invalid release manifest path.'}
         if((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $entry.Value){throw ('Release checksum mismatch: '+$entry.Name)}
     }
+    . (Join-Path $PSScriptRoot 'DeviceSupport.ps1')
+    $deviceSupport=Resolve-GTBookDeviceSupport $supported
+    if($supported -and -not $deviceSupport.Ready){
+        Add-Type -AssemblyName System.Windows.Forms
+        $message="Device controls are not ready ($($deviceSupport.Status)). Windows device discovery could not restore the required firmware interface.`n`nYes: open official driver support and stop setup.`nNo: install Essentials with device controls unavailable.`nCancel: stop setup."
+        $choice=[Windows.Forms.MessageBox]::Show($message,'GTBOOK Essentials - device support','YesNoCancel','Warning','Button2')
+        if($choice -eq 'Yes'){Start-Process 'https://www.carlcare.com/global/drivers-download/';exit 2}
+        if($choice -eq 'Cancel'){exit 2}
+    }
     Stop-Essentials
     New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
     $backup=Join-Path $stateRoot ('backup-'+(Get-Date -Format yyyyMMdd-HHmmss)+'-'+[guid]::NewGuid().ToString('N').Substring(0,6));New-Item -ItemType Directory -Path $backup | Out-Null
@@ -94,6 +103,6 @@ try {
         if($original){$original.Enabled=$oldOriginalEnabled}
         throw
     }finally{Release-Com $oldTask;Release-Com $original;Release-Com $folder;Release-Com $service}
-    Show-Result ('Installed GTBOOK Essentials '+$state.Version+'. It starts in the tray automatically at Windows sign-in.'+$(if(-not $supported){"`nThis model/BIOS is not yet reviewed; hardware writes stay disabled."}else{''}))
+    Show-Result ('Installed GTBOOK Essentials '+$state.Version+'. It starts in the tray automatically at Windows sign-in.'+$(if($supported -and -not $deviceSupport.Ready){"`nDevice controls are unavailable. See GitHub docs/DRIVER_SUPPORT.md for recovery steps."}elseif(-not $supported){"`nThis model/BIOS is not yet reviewed; hardware writes stay disabled."}else{''}))
 }catch{if($CheckOnly){Write-Error $_;exit 1};Show-Result $_.Exception.Message $true;exit 1}
 finally{if($installGate){if($gateOwned){$installGate.ReleaseMutex()};$installGate.Dispose()}}

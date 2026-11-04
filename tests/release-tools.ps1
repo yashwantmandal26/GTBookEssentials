@@ -14,4 +14,16 @@ if([IO.File]::ReadAllText($fixture) -ne 'second'){throw 'Installer failed to ato
 if(@(Get-ChildItem -LiteralPath $fixtureRoot -File).Count -ne 1){throw 'Installer left transaction files behind.'}
 $gate=New-Object Threading.Mutex($false,('Local\GTBookInstallerTest-'+[guid]::NewGuid().ToString('N')))
 try{if(-not $gate.WaitOne(0)){throw 'Installer gate failed.'};$gate.ReleaseMutex()}finally{$gate.Dispose()}
-'Release tooling passed: script parsing, new/upgrade atomic writes, transaction cleanup, installer gate.'
+. (Join-Path $root 'release\DeviceSupport.ps1')
+$script:supportChecks=0;$script:supportScans=0
+$ready=Resolve-GTBookDeviceSupport $true -Probe {param($supported) [pscustomobject]@{Ready=$true;Status='Ready'}} -Scan {$script:supportScans++}
+if(-not $ready.Ready -or $script:supportScans -ne 0){throw 'Healthy devices must not be rescanned.'}
+$fixed=Resolve-GTBookDeviceSupport $true -Probe {param($supported) $script:supportChecks++;[pscustomobject]@{Ready=($script:supportChecks -gt 1);Status='ProviderUnavailable'}} -Scan {$script:supportScans++}
+if(-not $fixed.Ready -or $script:supportScans -ne 1){throw 'Missing interface must be rechecked after one rescan.'}
+foreach($status in @('UnsupportedProfile','AccessDenied','InterfaceMismatch')){
+    $notReady=Resolve-GTBookDeviceSupport ($status -ne 'UnsupportedProfile') -Probe {param($supported) [pscustomobject]@{Ready=$false;Status=$status}} -Scan {$script:supportScans++}
+    if($notReady.Ready -or $script:supportScans -ne 1){throw 'Unsupported/mismatched/denied devices must not be repaired blindly.'}
+}
+$failed=Resolve-GTBookDeviceSupport $true -Probe {param($supported) [pscustomobject]@{Ready=$false;Status='ProviderUnavailable'}} -Scan {throw 'simulated scan failure'}
+if($failed.Ready){throw 'Failed recovery must not claim working device controls.'}
+'Release tooling passed: script parsing, atomic writes, installer gate and device-support recovery states. No drivers were changed by tests.'

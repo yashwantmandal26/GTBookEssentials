@@ -409,7 +409,7 @@ namespace GTBook {
                 var r=new Request{Action="keyboard-animation",Effect="Candy Chase",Brightness=100};var reply=new Reply{Ok=true};var notice=FeedbackNotice.Applied(r,reply);
                 Check(notice.Kind==FeedbackKind.Keyboard&&notice.Zones.Length==4&&notice.Percent==100,"colour strip missing");
                 for(int z=0;z<4;z++)Check(notice.Zones[z].ToArgb()==LivePreview.KeyColour(r,z,z/3.0,0).ToArgb(),"feedback colour disagrees with preview");
-                r.Brightness=0;notice=FeedbackNotice.Applied(r,reply);Check(notice.Detail.Contains("off")&&notice.Percent==0&&notice.Zones.All(c=>c.R==144&&c.G==148&&c.B==151),"off feedback must be neutral");
+                r.Brightness=0;notice=FeedbackNotice.Applied(r,reply);Check(notice.Detail.Length==0&&notice.Percent==0&&notice.Zones.All(c=>c.R==144&&c.G==148&&c.B==151),"off feedback must be neutral");
             });
             test("Keyboard effects and brightness have distinct primary messages",()=>{
                 var request=new Request{Action="keyboard-animation",Effect="Magnetic Slingshot",Brightness=50,Feedback="keyboard-effect"};
@@ -490,8 +490,8 @@ namespace GTBook {
                 var mode=FeedbackNotice.Pending(new Request{Action="mode",Mode=2});Check(mode.Mode==-1,"pending mode must not highlight a confirmed mode");
                 var motion=new PopupMotion();motion.Update(0,false,-1,10000);Check(motion.Opacity(0)==1&&!motion.Expired(9000),"pending feedback must be immediately readable and remain visible");
             });
-            test("Popup dimensions are a further five percent smaller with consistent content scaling",()=>{
-                using(var toast=new ShortcutToast(true))Check(toast.ClientSize.Width==420&&toast.ClientSize.Height==143&&Math.Abs(ShortcutToast.VisualScale-.874)<.001,"wrong compact popup size");
+            test("Compact notification dimensions use the requested cumulative scale",()=>{
+                using(var toast=new ShortcutToast(true))Check(toast.ClientSize.Width==399&&toast.ClientSize.Height==136&&Math.Abs(ShortcutToast.VisualScale-.8303)<.001,"wrong compact popup size");
             });
             test("Confirmed performance writes do not wait before their first read-back",()=>{
                 int delays=0;using(var oem=new OemProtocol((method,b)=>b[15]==160&&b[13]==0?2u:0u)){
@@ -510,6 +510,13 @@ namespace GTBook {
                     toast.Notify(new FeedbackNotice{Kind=FeedbackKind.Brightness,Title="Screen brightness",Percent=60});Check(toast.DisplayedPercent==60,"confirmed value did not replace previous value");
                 }
                 var motion=new PopupMotion();motion.Update(0,false,20);motion.Update(200,true,80);double before=motion.Percent(250);motion.Hold(250);Check(motion.Percent(250)==before&&motion.Percent(360)==80&&!motion.Expired(9000),"pending hold restarted the meter or its expiry");
+            });
+            test("Routine notifications carry only their primary information without secondary copy",()=>{
+                foreach(var request in new[]{new Request{Action="mode",Mode=1},new Request{Action="screen-brightness"},new Request{Action="keyboard",Effect="Rainbow"},new Request{Action="keyboard",Feedback="keyboard-brightness"}}){
+                    var reply=new Reply{Ok=true};reply.Data["mode"]="Balanced";reply.Data["display-brightness"]="50";
+                    Check(FeedbackNotice.Applied(request,reply).Detail.Length==0&&FeedbackNotice.Pending(request).Detail.Length==0,"unnecessary secondary copy remains");
+                }
+                Check(FeedbackNotice.Applied(new Request(),Reply.Fail("Device disconnected")).Detail=="Device disconnected","actionable error was hidden");
             });
             test("Routine controls apply directly while GPU and startup retain confirmation",()=>{
                 foreach(string action in new[]{"mode","auto","fan","keyboard","keyboard-animation","rear","rear-off","rear-music","usb","windows-key","software-fn"})Check(!ConfirmationPolicy.Required(action),"unexpected confirmation: "+action);

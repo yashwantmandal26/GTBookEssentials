@@ -22,7 +22,7 @@ namespace GTBook {
         }
     }
     public static class PopupLayout {
-        public static RectangleF KeyboardTitle(Size size,float scale){return new RectangleF(91*scale,34*scale,Math.Max(1,size.Width-113*scale),46*scale);}
+        public static RectangleF KeyboardTitle(Size size,float scale){return new RectangleF(91*scale,20*scale,Math.Max(1,size.Width-113*scale),54*scale);}
         public static RectangleF Title(Size size,float scale,bool badge){return new RectangleF(89*scale,20*scale,Math.Max(1,size.Width-(badge?194:110)*scale),31*scale);}
         public static RectangleF Badge(Size size,float scale){return new RectangleF(size.Width-84*scale,23*scale,64*scale,25*scale);}
         public static Point BottomCenter(Rectangle area,Size popup,int bottomGap){

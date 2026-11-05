@@ -5,7 +5,7 @@
 
 A small, offline control center for your Infinix GTBook.
 
-**[Download Setup.exe](https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.0.0-rc.12/GTBOOK-Essentials-Setup.exe)** · [All downloads](https://github.com/yashwantmandal26/GTBookEssentials/releases) · [Report an issue](https://github.com/yashwantmandal26/GTBookEssentials/issues)
+**[Download Setup.exe](https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.0.0-rc.13/GTBOOK-Essentials-Setup.exe)** · [All downloads](https://github.com/yashwantmandal26/GTBookEssentials/releases) · [Report an issue](https://github.com/yashwantmandal26/GTBookEssentials/issues)
 </div>
 
 ## Install in 3 steps

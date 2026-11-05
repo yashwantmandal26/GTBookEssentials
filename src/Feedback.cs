@@ -16,10 +16,10 @@ namespace GTBook {
         public Color[] Zones;
         public bool IsPending;
         public static FeedbackNotice Pending(Request request){
-            if(request.Action=="mode")return new FeedbackNotice{Kind=FeedbackKind.Mode,Title="Switching to "+PerformanceModes.Names[request.Mode],Detail="Applying · waiting for hardware",Mode=-1,IsPending=true};
+            if(request.Action=="mode")return new FeedbackNotice{Kind=FeedbackKind.Mode,Title="Switching to "+PerformanceModes.Names[request.Mode],Detail="",Mode=-1,IsPending=true};
             if(request.Action=="screen-brightness")return new FeedbackNotice{Kind=FeedbackKind.Brightness,Title="Screen brightness",Detail=request.Step>0?"Increasing…":"Decreasing…",IsPending=true};
-            if(request.Action=="auto"||request.Action=="fan"||request.Action=="usb")return new FeedbackNotice{Title=request.Action=="usb"?"USB charging "+(request.Enabled?"ON":"OFF"):request.Action=="auto"?"Automatic cooling":"Maximum fans",Detail="Applying · waiting for hardware",IsPending=true};
-            var notice=Applied(request,new Reply{Ok=true});notice.IsPending=true;notice.Detail="Applying · waiting for hardware";return notice;
+            if(request.Action=="auto"||request.Action=="fan"||request.Action=="usb")return new FeedbackNotice{Title=request.Action=="usb"?"USB charging "+(request.Enabled?"ON":"OFF"):request.Action=="auto"?"Automatic cooling":"Maximum fans",Detail="",IsPending=true};
+            var notice=Applied(request,new Reply{Ok=true});notice.IsPending=true;notice.Detail="";return notice;
         }
         public static FeedbackNotice Applied(Request r,Reply reply){
             if(!reply.Ok)return new FeedbackNotice{Kind=FeedbackKind.Error,Title="Couldn't apply that",Detail=reply.Message};
@@ -35,7 +35,7 @@ namespace GTBook {
             if(r.Action=="keyboard"||r.Action=="keyboard-animation"){
                 var zones=new Color[4];for(int i=0;i<4;i++)zones[i]=r.Brightness==0?Color.FromArgb(144,148,151):LivePreview.KeyColour(r,i,i/3.0,0);
                 bool brightness=r.Feedback=="keyboard-brightness";
-                return new FeedbackNotice{Kind=brightness?FeedbackKind.KeyboardBrightness:FeedbackKind.Keyboard,Title=brightness?(r.Brightness==0?"Off":r.Brightness+"%"):r.Effect,Detail=brightness?(r.Brightness==0?"Keyboard lights off":"Keyboard light level"):(r.Brightness==0?"Lights off · effect selected":r.Brightness+"% brightness · effect applied"),Percent=r.Brightness,Zones=zones};
+                return new FeedbackNotice{Kind=brightness?FeedbackKind.KeyboardBrightness:FeedbackKind.Keyboard,Title=brightness?(r.Brightness==0?"Off":r.Brightness+"%"):r.Effect,Detail=brightness?(r.Brightness==0?"Keyboard lights off":"Keyboard light level"):(r.Brightness==0?"Lights off · effect selected":r.Brightness+"% brightness"),Percent=r.Brightness,Zones=zones};
             }
             return new FeedbackNotice{Title="All set",Detail=reply.Message};
         }
@@ -60,7 +60,7 @@ namespace GTBook {
         public void Dispose(){foreach(var player in players){player.Stop();player.Dispose();}foreach(var stream in streams)stream.Dispose();}
     }
     public sealed class ShortcutToast : Form {
-        public const float VisualScale=.92f;
+        public const float VisualScale=.874f;
         readonly System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer();readonly Stopwatch elapsed=Stopwatch.StartNew();
         readonly PopupMotion motion=new PopupMotion();readonly bool renderOnly;
         FeedbackNotice notice=new FeedbackNotice();
@@ -69,7 +69,7 @@ namespace GTBook {
         protected override CreateParams CreateParams{get{var p=base.CreateParams;p.ExStyle|=0x08000000|0x80;return p;}}
         public ShortcutToast(bool renderOnly=false){
             this.renderOnly=renderOnly;
-            FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;ShowInTaskbar=false;TopMost=true;DoubleBuffered=true;AutoScaleMode=AutoScaleMode.Dpi;ClientSize=new Size(442,151);BackColor=Theme.Ivory;
+            FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;ShowInTaskbar=false;TopMost=true;DoubleBuffered=true;AutoScaleMode=AutoScaleMode.Dpi;ClientSize=new Size(420,143);BackColor=Theme.Ivory;
             UpdateShape();
             timer.Interval=16;timer.Tick+=(s,e)=>{double ms=elapsed.Elapsed.TotalMilliseconds;if(motion.Expired(ms)){Hide();timer.Stop();return;}double alpha=Math.Max(.01,motion.Opacity(ms));if(Math.Abs(Opacity-alpha)>.001)Opacity=alpha;Invalidate();timer.Interval=motion.NextTick(ms);};
         }
@@ -101,7 +101,7 @@ namespace GTBook {
             DrawIcon(g,new RectangleF(31*s,32*s,30*s,30*s),s);
             bool keyboard=notice.Kind==FeedbackKind.Keyboard||notice.Kind==FeedbackKind.KeyboardBrightness;
             if(keyboard){
-                TextAt(g,(notice.Kind==FeedbackKind.Keyboard?"KEYBOARD EFFECT":"KEYBOARD BRIGHTNESS")+(notice.IsPending?" · APPLYING":""),8,FontStyle.Bold,new RectangleF(91*s,15*s,Width-113*s,20*s),Theme.OrangeInk);
+                TextAt(g,(notice.Kind==FeedbackKind.Keyboard?"KEYBOARD EFFECT":"KEYBOARD BRIGHTNESS"),8,FontStyle.Bold,new RectangleF(91*s,15*s,Width-113*s,20*s),Theme.OrangeInk);
                 var title=PopupLayout.KeyboardTitle(ClientSize,s);
                 TextAt(g,notice.Title,FittedTitleSize(g,notice.Title,title),FontStyle.Bold,title,Theme.Ink,TextFormatFlags.SingleLine|TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter);
                 TextAt(g,notice.Detail,9,FontStyle.Regular,new RectangleF(92*s,82*s,Width-114*s,24*s),Theme.Muted);

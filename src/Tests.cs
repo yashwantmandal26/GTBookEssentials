@@ -485,13 +485,13 @@ namespace GTBook {
             });
             test("Pending feedback is explicit and does not announce hardware success",()=>{
                 foreach(var request in new[]{new Request{Action="mode",Mode=2},new Request{Action="keyboard",Effect="Rainbow"},new Request{Action="screen-brightness",Step=10},new Request{Action="fan",Enabled=true}}){
-                    var pending=FeedbackNotice.Pending(request);Check(pending.IsPending&&!pending.Detail.Contains("confirmed"),"pending message announced success");
+                    var pending=FeedbackNotice.Pending(request);Check(pending.IsPending&&!pending.Detail.Contains("confirmed")&&!pending.Detail.Contains("Applying"),"pending message announced success");
                 }
                 var mode=FeedbackNotice.Pending(new Request{Action="mode",Mode=2});Check(mode.Mode==-1,"pending mode must not highlight a confirmed mode");
                 var motion=new PopupMotion();motion.Update(0,false,-1,10000);Check(motion.Opacity(0)==1&&!motion.Expired(9000),"pending feedback must be immediately readable and remain visible");
             });
-            test("Popup dimensions are eight percent smaller with all contents using the same scale",()=>{
-                using(var toast=new ShortcutToast(true))Check(toast.ClientSize.Width==442&&toast.ClientSize.Height==151&&Math.Abs(ShortcutToast.VisualScale-.92)<.001,"wrong compact popup size");
+            test("Popup dimensions are a further five percent smaller with consistent content scaling",()=>{
+                using(var toast=new ShortcutToast(true))Check(toast.ClientSize.Width==420&&toast.ClientSize.Height==143&&Math.Abs(ShortcutToast.VisualScale-.874)<.001,"wrong compact popup size");
             });
             test("Confirmed performance writes do not wait before their first read-back",()=>{
                 int delays=0;using(var oem=new OemProtocol((method,b)=>b[15]==160&&b[13]==0?2u:0u)){

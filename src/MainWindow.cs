@@ -144,6 +144,9 @@ namespace GTBook
 		private bool fnKeys = true;
 
 		private int keyboardPending;
+        private readonly LatestCommandPump<Request> keyboardCommands;
+        private bool refreshingReadings;
+        private int settingsRevision;
 
 		private readonly RearPresentation rearState = new RearPresentation();
 
@@ -168,6 +171,7 @@ namespace GTBook
 		{
 			MainWindow mainWindow = this;
 			this.preview = preview;
+            keyboardCommands=new LatestCommandPump<Request>(r=>Run(r,"keyboard",false,!string.IsNullOrEmpty(r.Feedback)));
             try{string preference=Path.Combine(Store.DirectoryPath,"mode-sounds.txt");bool enabled;if(File.Exists(preference)&&bool.TryParse(File.ReadAllText(preference),out enabled))modeSounds=enabled;}catch{}
             for(int i=0;i<4;i++){keyboard.Colors[i]=LightingColour.VividHex(keyboard.Colors[i]);rear.Colors[i]=LightingColour.VividHex(rear.Colors[i]);}
 			Text = AppIdentity.Name + (preview ? " (layout preview)" : "");
@@ -956,7 +960,7 @@ namespace GTBook
 			try
 			{
                 var request=Copy(keyboard,"keyboard");request.Feedback=action;
-				await Run(request, "keyboard", false, true);
+				await keyboardCommands.Submit(request);
 			}
 			finally
 			{
@@ -1384,7 +1388,7 @@ namespace GTBook
 			{
                 if(busy)return;
                 applyKeyboardButton.Enabled=false;
-                try{await Run(Copy(keyboard,"keyboard"),"keyboard");}finally{if(!IsDisposed)applyKeyboardButton.Enabled=true;}
+                try{await keyboardCommands.Submit(Copy(keyboard,"keyboard"));}finally{if(!IsDisposed)applyKeyboardButton.Enabled=true;}
 			});
             applyKeyboardButton=(RaisedButton)button;
             applyKeyboardButton.Accent=Color.FromArgb(244,117,20);
@@ -1858,7 +1862,7 @@ namespace GTBook
 				rearState.Starting();
 				UpdateRearIndicator();
 				EventWaitHandle stopSignal = musicStop;
-				musicTask = Task.Run(() => WorkerClient.Run(request, int.MaxValue, stopSignal));
+				musicTask = Task.Factory.StartNew(() => WorkerClient.Run(request, int.MaxValue, stopSignal),CancellationToken.None,TaskCreationOptions.LongRunning,TaskScheduler.Default);
 				Task<Reply> pending = musicTask;
 				status.Text = "Starting music sync… If no light reacts, check playback and the status below.";
 				await Task.WhenAny(pending, Task.Delay(1500));
@@ -1919,8 +1923,8 @@ namespace GTBook
                         var updateTime=Stopwatch.StartNew();
                         var updated=await Task.Run(()=>channel.Update(request));
                         if(!updated.Ok)throw new IOException(updated.Message);
-                        Store.Log("Keyboard live update | "+request.Effect+" | "+request.Brightness+"% | "+updateTime.ElapsedMilliseconds+" ms");
-                        RecordKeyboardAnimation(request,silent);return;
+                        await Task.Run(()=>Store.Log("Keyboard live update | "+request.Effect+" | "+request.Brightness+"% | "+updateTime.ElapsedMilliseconds+" ms"));
+                        await RecordKeyboardAnimation(request,silent);return;
                     }
 					await StopKeyboardAnimation();
 					using (EventWaitHandle ready = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\GTBookKeyboardReady"))
@@ -1935,7 +1939,7 @@ namespace GTBook
 							request.OwnerStartedTicks = process.StartTime.ToUniversalTime().Ticks;
 						}
 						EventWaitHandle signal = keyboardStop;
-						keyboardTask = Task.Run(() => WorkerClient.Run(request, int.MaxValue, signal));
+						keyboardTask = Task.Factory.StartNew(() => WorkerClient.Run(request, int.MaxValue, signal),CancellationToken.None,TaskCreationOptions.LongRunning,TaskScheduler.Default);
 						Task<Reply> pending = keyboardTask;
 						status.Text = "Starting Extra · " + request.Effect + "…";
 						Stopwatch timer = Stopwatch.StartNew();
@@ -1969,8 +1973,7 @@ namespace GTBook
 							}
 							try
 							{
-								Store.Save("keyboard", request);
-                                Store.SaveFlag("resume-extra",request.Brightness>0);
+								await Task.Run(()=>{Store.Save("keyboard",request);Store.SaveFlag("resume-extra",request.Brightness>0);});
 							}
 							catch (Exception ex)
 							{
@@ -2012,14 +2015,14 @@ namespace GTBook
 			}
 		}
 
-        private void RecordKeyboardAnimation(Request request,bool silent=false){
+        private async Task RecordKeyboardAnimation(Request request,bool silent=false){
             if(request.KeepAwake)keyboardAwakeConfigured=true;
             keyboardResult=request.Brightness==0?"Keyboard lights off":"Streaming · "+request.Effect+" · four zones";
             status.Text=keyboardResult;
             if(kbOutcome!=null&&!kbOutcome.IsDisposed)kbOutcome.Text=keyboardResult;
             if(stopKeyboardButton!=null&&!stopKeyboardButton.IsDisposed)stopKeyboardButton.Enabled=true;
-            try{Store.Save("keyboard",request);Store.SaveFlag("resume-extra",request.Brightness>0);}catch(Exception error){status.Text+=" · preferences not saved: "+error.Message;}
             if(!silent)NotifyApplied(request,new Reply{Ok=true});
+            try{await Task.Run(()=>{Store.Save("keyboard",request);Store.SaveFlag("resume-extra",request.Brightness>0);});}catch(Exception error){status.Text+=" · preferences not saved: "+error.Message;}
         }
 		private async void WatchKeyboardAnimation(Task<Reply> pending)
 		{
@@ -2370,8 +2373,27 @@ namespace GTBook
             });
         }
 
+        private async Task RefreshReadings(){
+            if(preview||IsDisposed||refreshingReadings||busy||keyboardPending>0)return;
+            refreshingReadings=true;
+            int revision=settingsRevision;
+            try{
+                var reply=await Task.Run(()=>WorkerClient.Run(new Request{Action="refresh"}));
+                if(IsDisposed||busy||revision!=settingsRevision)return;
+                hardwareReady=reply.Ok&&reply.Data.ContainsKey("mode");readingsFailed=!reply.Ok;
+                if(reply.Ok){
+                    foreach(var entry in reply.Data)snapshot[entry.Key]=entry.Value;
+                    readingsUpdatedUtc=DateTime.UtcNow;
+                    if(reply.Data.ContainsKey("rear-power"))rearState.ObservePower(reply.Data["rear-power"]=="On");
+                    else if(reply.Data.ContainsKey("rear-power-read-error"))rearState.Failed();
+                    UpdateValues();TrackPerformanceMode();
+                }else UpdateReadingsStamp();
+            }finally{refreshingReadings=false;}
+        }
 		private async Task Run(Request r, string saveName, bool background = false, bool fromShortcut = false)
 		{
+            if(background&&r.Action=="refresh"){await RefreshReadings();return;}
+            if(!background)settingsRevision++;
 			if (preview)
 			{
 				status.Text = "Layout preview does not access hardware.";
@@ -2469,8 +2491,7 @@ namespace GTBook
 				{
 					try
 					{
-						Store.Save(saveName, r);
-                        if(r.Action=="keyboard")Store.SaveFlag("resume-extra",false);
+						await Task.Run(()=>{Store.Save(saveName,r);if(r.Action=="keyboard")Store.SaveFlag("resume-extra",false);});
 					}
 					catch (Exception ex)
 					{

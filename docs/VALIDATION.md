@@ -1,6 +1,15 @@
 # Release validation
 
-Candidate: 2.0.0-rc.8. Hardware profile: INFINIX GL613 / BIOS 1.00.
+Candidate: 2.0.0-rc.9. Hardware profile: INFINIX GL613 / BIOS 1.00.
+
+## RC9 responsiveness and command reliability
+
+- 89 software checks pass. A simulated blocked executor receives a 2,000-request burst and executes only its in-flight state plus the final desired state, without concurrent writes. Failures propagate and later requests can recover.
+- Native keyboard bursts reuse a helper that exits after five idle seconds. A real-process simulated-device test proves process reuse, terminated-helper recovery and rejection of unrelated commands. This is not a measurement of physical HID latency.
+- Background dashboard refresh does not take the UI command semaphore. Each logical telemetry read retains an atomic EC lease, while HID animation owns a separate keyboard lease. Slow telemetry therefore no longer blocks ordinary HID frames; power-gate changes still need EC access.
+- Stale background snapshots are discarded if an interactive setting changed during the read. Long-running stream supervision uses dedicated tasks rather than occupying thread-pool workers. Conflict inspection runs off the frame loop; previews repaint at 10 Hz. Preference writes are awaited off the UI thread.
+- Model/BIOS identity is cached within a helper process; firmware changes require restarting Windows and therefore a fresh process. Full hardware guards remain in force.
+- Sustained high-CPU physical keyboard latency, battery impact and long-session reliability still require on-device testing. No real-time or zero-failure guarantee is made.
 
 ## RC8 device-support checks
 
@@ -31,7 +40,7 @@ Candidate: 2.0.0-rc.8. Hardware profile: INFINIX GL613 / BIOS 1.00.
 - EC lighting gates are written only when their state changes. Timeout-disable packets no longer carry RGB/brightness payload and are not reissued on each shortcut in the same active app session. Initial static-zone setup remains once when entering a fresh Extra connection, as required by the reviewed controller path.
 - Wide/full-screen Lighting places keyboard and rear controls beside each other. The 1920-pixel wide layout and compact fallback passed geometry checks and DPI-aware visual rendering. Group headers open their effect list and use large chevrons; Four zones marks its extra zone settings.
 - USB settings have dedicated ON/OFF controls and highlights based only on confirmed firmware values. The exact OEM EC/SMI write path is followed by bounded repeated firmware read-back. Optional installer -VerifyUsb checks both states and restores the original setting.
-- RC5 installed successfully (2.0.0.7), with the installed EXE hash matching the packaged EXE. The user reported that the new layout/effect picker and F3 brightness/effect transitions are now good.
+- RC5 installed successfully (2.0.0.8), with the installed EXE hash matching the packaged EXE. The user reported that the new layout/effect picker and F3 brightness/effect transitions are now good.
 - On-device USB verification confirmed OFF and ON through the OEM firmware path, then restored the original OFF setting; report ok=true and original_restored=true. Real shutdown USB power remains pending a physical phone/port test. Firmware read-back does not measure the voltage/current of a shut-down USB port.
 
 ## RC4 feedback and device details
@@ -53,7 +62,7 @@ Candidate: 2.0.0-rc.8. Hardware profile: INFINIX GL613 / BIOS 1.00.
 - Extra animation active, two app processes: 66.91 MiB total private bytes and 96.95 MiB summed working sets; 1015.625 ms CPU over 30.27 seconds (3.356% of one logical core). UI was visible; this is not a native-effects tray-idle or battery-life measurement, and summed working sets can include shared pages.
 - RC2 corrects an observed transient hardware-lock collision during Extra animation and changes button background compositing. 64 desktop software checks pass; release-tooling checks cover parse/new-install/upgrade atomic writes and cleanup. RC2 still needs application and live visual verification.
 - RC3 additionally clears every custom-button paint surface, uses an opaque bevel shadow, keeps orange selected fills during temporary disable, closes the verified OEM UI at administrator startup/open, and refreshes visible readings at 5s AC / 10s battery without stopping music. 69 desktop software checks and 68 headless checks pass. New tests exercise paint-only repaint, persistent orange fill, strict OEM identity matching, graceful/fallback shutdown ordering and polling policy.
-- RC3 (file version 2.0.0.7) was installed and inspected live on 4 November 2026: black button leftovers were absent, Overview and Gaming remained orange-selected, and readings changed without a Refresh click (CPU 45→48°C, GPU 40→41°C, GPU fan 2000→1900 RPM). The user confirmed that opening Essentials automatically closed official Control Center.
+- RC3 (file version 2.0.0.8) was installed and inspected live on 4 November 2026: black button leftovers were absent, Overview and Gaming remained orange-selected, and readings changed without a Refresh click (CPU 45→48°C, GPU 40→41°C, GPU fan 2000→1900 RPM). The user confirmed that opening Essentials automatically closed official Control Center.
 
 ## Release gates
 

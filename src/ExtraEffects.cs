@@ -102,7 +102,9 @@ namespace GTBook {
             using(var stop=new EventWaitHandle(false,EventResetMode.ManualReset,StopName))
             using(var ready=new EventWaitHandle(false,EventResetMode.ManualReset,ReadyName))
             using(var lease=new HardwareLease())
+            using(var keyboardLease=new HardwareLease(@"Global\GTBookStableKeyboard"))
             using(var channel=string.IsNullOrEmpty(r.KeyboardSession)?null:new KeyboardChannel(r.KeyboardSession)){
+                if(!keyboardLease.Acquire(0))throw new IOException("Another keyboard controller is active.");
                 if(!lease.Acquire(3000))throw new IOException("Another hardware command is busy. Retry after it finishes.");
                 if(stop.WaitOne(0)||!OwnerAlive(r.OwnerProcessId,r.OwnerStartedTicks))return new Reply{Ok=true,Message="Animation cancelled before starting."};
                 KeyboardDevice keyboard=null;int revision=0;
@@ -117,14 +119,18 @@ namespace GTBook {
                     bool awake=r.KeepAwake&&r.ArmKeyboardAwake;
                     lease.Release();
                     if(r.Brightness==0&&channel==null)return new Reply{Ok=true,Message="Keyboard off · brightness is 0%."};
-                    var clock=Stopwatch.StartNew();var pacer=new Pacer();double nextConflict=1;byte[][] previous=null;
+                    var clock=Stopwatch.StartNew();var pacer=new Pacer();byte[][] previous=null;
+                    string conflictFailure="";int checkingConflict=0;
+                    using(var monitor=new System.Threading.Timer(state=>{
+                        if(Interlocked.Exchange(ref checkingConflict,1)!=0)return;
+                        try{Volatile.Write(ref conflictFailure,Hardware.Conflict());}catch(Exception error){Volatile.Write(ref conflictFailure,error.Message);}finally{Volatile.Write(ref checkingConflict,0);}
+                    },null,1000,2000)){
                     int frames=LiveStream(r,()=>stop.WaitOne(0),()=>{
-                        if(clock.Elapsed.TotalSeconds>=nextConflict){nextConflict=clock.Elapsed.TotalSeconds+1;string conflict=Hardware.Conflict();if(conflict.Length>0)throw new IOException(conflict);}
+                        string conflict=Volatile.Read(ref conflictFailure);if(conflict.Length>0)throw new IOException(conflict);
                         return OwnerAlive(r.OwnerProcessId,r.OwnerStartedTicks);
                     },packets=>{
                         if(previous!=null&&packets.Select((p,i)=>p.SequenceEqual(previous[i])).All(equal=>equal))return true;
-                        if(!lease.Acquire(100))return false;
-                        try{for(int i=0;i<4;i++)if(previous==null||!packets[i].SequenceEqual(previous[i]))keyboard.Send(packets[i]);previous=packets;return true;}finally{lease.Release();}
+                        for(int i=0;i<4;i++)if(previous==null||!packets[i].SequenceEqual(previous[i]))keyboard.Send(packets[i]);previous=packets;return true;
                     },enabled=>{if(!lease.Acquire(3000))throw new IOException("Keyboard power control is busy.");try{using(var oem=new OemProtocol())oem.KeyLight(enabled);}finally{lease.Release();}},()=>{
                         Request next;int read;
                         if(channel==null||!channel.TryRead(out next,out read))return null;
@@ -139,6 +145,7 @@ namespace GTBook {
                         if(channel==null)stop.WaitOne(delay);else if(WaitHandle.WaitAny(new[]{stop,channel.Changed},delay)==1)pacer.Reset(clock.Elapsed.TotalMilliseconds);
                     });
                     var result=new Reply{Ok=true,Message="Extra animation stopped · last frame held."};result.Data["frames"]=frames.ToString();return result;
+                    }
                 }finally{lease.Release();if(revision!=0&&channel!=null)channel.Acknowledge(revision,false);if(keyboard!=null)keyboard.Dispose();}
             }
         }

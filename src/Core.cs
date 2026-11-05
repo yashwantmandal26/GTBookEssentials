@@ -88,7 +88,9 @@ namespace GTBook {
     public sealed class Identity {
         public string Manufacturer, Model, Bios;
         public bool Supported { get { return (Manufacturer??"").IndexOf("INFINIX", StringComparison.OrdinalIgnoreCase) >= 0 && string.Equals(Model,"GL613",StringComparison.OrdinalIgnoreCase) && Bios == "1.00"; } }
-        public static Identity Read() {
+        static readonly Lazy<Identity> cached=new Lazy<Identity>(ReadCore);
+        public static Identity Read(){var value=cached.Value;return new Identity{Manufacturer=value.Manufacturer,Model=value.Model,Bios=value.Bios};}
+        static Identity ReadCore() {
             using (var systems = new ManagementObjectSearcher("SELECT Manufacturer, Model FROM Win32_ComputerSystem"))
             using (var result = systems.Get())
             using (var bios = new ManagementObjectSearcher("SELECT SMBIOSBIOSVersion FROM Win32_BIOS"))
@@ -99,6 +101,7 @@ namespace GTBook {
         }
     }
     public static class Hardware {
+        static uint Telemetry(Func<uint> read){using(var lease=new HardwareLease()){if(!lease.Acquire(0))throw new IOException("Device busy; reading deferred.");try{return read();}finally{lease.Release();}}}
         static readonly object conflictLock=new object();static readonly ConflictCache pythonCache=new ConflictCache();
         public static string Base { get { return AppDomain.CurrentDomain.BaseDirectory; } }
         public static string OemDirectory { get { return Path.GetFullPath(Path.Combine(Base, "..", "Official_ControlCenter")); } }
@@ -154,12 +157,15 @@ namespace GTBook {
             // so ownership is also checked immediately before each action.
             if (r.Action == "keyboard") {
                 if(ExtraEffects.Contains(r.Effect))throw new ArgumentException("Extra effects require the keyboard animation worker.");
+                using(var ownership=new HardwareLease(@"Global\GTBookStableKeyboard")){
+                if(!ownership.Acquire(0))throw new IOException("Stop the active Extra animation before sending a native keyboard command.");
                 using(var gate=(OemProtocol)Oem()) {gate.KeyLight(r.Brightness>0); }
                 using (var keyboard = new KeyboardDevice()) {
                     foreach(var packet in Protocol.NativeKeyboardPackets(r))keyboard.Send(packet);
                 }
                 answer.Message = "Keyboard command sent • " + r.Effect + ", " + r.Brightness + "% (visual confirmation needed).";
                 return answer;
+                }
             }
             using(var native = (OemProtocol)Oem()) {
             object oem=native;
@@ -213,17 +219,17 @@ namespace GTBook {
                 answer.Message="Music sync stopped; static rear colour restored.";return answer;
             }
             if(r.Action!="refresh")return answer;
-            uint mode = Call(oem, "GetPerformanceMode");
+            uint mode = Telemetry(()=>Call(oem, "GetPerformanceMode"));
             answer.Data["mode"] = mode <= 3 ? new[] { "Quiet", "Balanced", "Gaming", "OEM mode 3" }[mode] : "Unknown (" + mode + ")";
-            answer.Data["cpu"] = Temperature(Call(oem, "GetCPUTem"));
-            answer.Data["cooling"] = Call(oem, "GetFanFullMode") == 0 ? "Firmware auto" : "Full fan override";
+            answer.Data["cpu"] = Temperature(Telemetry(()=>Call(oem, "GetCPUTem")));
+            answer.Data["cooling"] = Telemetry(()=>Call(oem, "GetFanFullMode")) == 0 ? "Firmware auto" : "Full fan override";
             foreach(var field in new[]{"gpu","cpu-fan","gpu-fan","usb","gpu-mode"}) {
-                try { uint v=Call(oem,field=="gpu"?"GetGPUTem":field=="cpu-fan"?"GetCPUFan":field=="gpu-fan"?"GetGPUFan":field=="usb"?"GetUSBCharging":"GetGPUMode");
+                try { uint v=Telemetry(()=>Call(oem,field=="gpu"?"GetGPUTem":field=="cpu-fan"?"GetCPUFan":field=="gpu-fan"?"GetGPUFan":field=="usb"?"GetUSBCharging":"GetGPUMode"));
                     answer.Data[field]=field=="gpu"?Temperature(v):field.EndsWith("fan")?(v*100)+" RPM":field=="usb"?(v==1?"On":"Off"):GpuModes.Name(v);
                     if(field=="gpu-mode")answer.Data["gpu-raw"]=v.ToString();
                 } catch(Exception e){answer.Data[field]="Unavailable: "+e.Message;}
             }
-            try{answer.Data["rear-power"]=Call(oem,"getLight2")==0?"On":"Off";}catch(Exception e){answer.Data["rear-power-read-error"]=e.Message;}
+            try{answer.Data["rear-power"]=Telemetry(()=>Call(oem,"getLight2"))==0?"On":"Off";}catch(Exception e){answer.Data["rear-power-read-error"]=e.Message;}
             if (r.Action == "refresh") answer.Message = "Hardware refreshed • " + DateTime.Now.ToString("HH:mm:ss");
             return answer;
             }
@@ -231,9 +237,10 @@ namespace GTBook {
     }
     public static class WorkerClient {
         static readonly Lazy<BrightnessBroker> brightness=new Lazy<BrightnessBroker>(()=>new BrightnessBroker());
-        public static void DisposeShared(){if(brightness.IsValueCreated)brightness.Value.Dispose();}
+        static readonly Lazy<NativeKeyboardBroker> keyboard=new Lazy<NativeKeyboardBroker>(()=>new NativeKeyboardBroker());
+        public static void DisposeShared(){if(brightness.IsValueCreated)brightness.Value.Dispose();if(keyboard.IsValueCreated)keyboard.Value.Dispose();}
         public static Reply Run(Request request, int timeout = 12000, WaitHandle stop = null) {
-            try {if(request.Action=="screen-brightness"){Protocol.Validate(request);return brightness.Value.Run(request.Step);}return RunCore(request,timeout,stop);}catch(Exception e){return Reply.Fail("Hardware helper could not complete: "+e.Message);}
+            try {if(request.Action=="screen-brightness"){Protocol.Validate(request);return brightness.Value.Run(request.Step);}if(request.Action=="keyboard")return keyboard.Value.Run(request);return RunCore(request,timeout,stop);}catch(Exception e){return Reply.Fail("Hardware helper could not complete: "+e.Message);}
         }
         static Reply RunCore(Request request, int timeout, WaitHandle stop) {
             string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(request)));

@@ -25,6 +25,10 @@ namespace GTBook
 		{
 #if TESTING
             if(args.Length>0&&(args[0]=="--self-test"||args[0]=="--render"))SetProcessDPIAware();
+            if(args.Length==1&&args[0]=="--keyboard-worker-simulated"){
+                using(var input=new StreamReader(new FileStream(new SafeFileHandle(GetStdHandle(-10),false),FileAccess.Read)))
+                using(var output=new StreamWriter(new FileStream(new SafeFileHandle(GetStdHandle(-11),false),FileAccess.Write),new UTF8Encoding(false)))return NativeKeyboardBroker.Serve(input,output,r=>{Thread.Sleep(20);return new Reply{Ok=true};});
+            }
 #endif
             if(args.Length==1&&args[0]=="--show")return AppSignals.Send(AppSignals.ShowName)?0:2;
             if(args.Length==1&&args[0]=="--exit")return AppSignals.Send(AppSignals.ExitName)?0:2;
@@ -46,6 +50,10 @@ namespace GTBook
             if(args.Length==1&&args[0]=="--brightness-worker"){
                 using(var input=new StreamReader(new FileStream(new SafeFileHandle(GetStdHandle(-10),false),FileAccess.Read)))
                 using(var output=new StreamWriter(new FileStream(new SafeFileHandle(GetStdHandle(-11),false),FileAccess.Write),new UTF8Encoding(false)))return BrightnessBroker.Serve(input,output);
+            }
+            if(args.Length==1&&args[0]=="--keyboard-worker"){
+                using(var input=new StreamReader(new FileStream(new SafeFileHandle(GetStdHandle(-10),false),FileAccess.Read)))
+                using(var output=new StreamWriter(new FileStream(new SafeFileHandle(GetStdHandle(-11),false),FileAccess.Write),new UTF8Encoding(false)))return NativeKeyboardBroker.Serve(input,output);
             }
             if(args.Contains("--verify-gpu")||args.Contains("--verify-gpu-and-start")){
                 Dictionary<string,object> report;bool created;
@@ -140,7 +148,7 @@ namespace GTBook
 					}
 					Request request = new JavaScriptSerializer().Deserialize<Request>(Encoding.UTF8.GetString(Convert.FromBase64String(args[1])));
 					Protocol.Validate(request);
-					if (request.Action == "device-info" || request.Action == "screen-brightness" || request.Action == "keyboard-animation" || request.Action == "rear-music")
+					if (request.Action == "refresh" || request.Action == "device-info" || request.Action == "screen-brightness" || request.Action == "keyboard-animation" || request.Action == "rear-music")
 					{
 						reply2 = Hardware.Execute(request);
 					}

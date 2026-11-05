@@ -1,6 +1,6 @@
 param([switch]$SkipTests)
 $ErrorActionPreference='Stop'
-$version='2.0.0-rc.8'
+$version='2.0.0-rc.9'
 if(-not $SkipTests){& (Join-Path $PSScriptRoot 'tests\run.ps1');if(-not $?){throw 'Release checks failed.'}}
 & (Join-Path $PSScriptRoot 'tests\release-tools.ps1')
 $out=Join-Path $PSScriptRoot 'out';New-Item -ItemType Directory -Path $out -Force | Out-Null

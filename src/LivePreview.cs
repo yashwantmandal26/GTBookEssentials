@@ -13,7 +13,7 @@ namespace GTBook {
         readonly Stopwatch clock=new Stopwatch();
         public bool Animate {set{if(value){clock.Start();animation.Start();}else{clock.Stop();animation.Stop();}}}
         double phase {get{return clock.Elapsed.TotalSeconds;}}
-        public LivePreview(){DoubleBuffered=true;BackColor=Theme.Ivory;Height=170;AccessibleName="Graphical preview, not applied";animation.Interval=50;animation.Tick+=(s,e)=>{var form=FindForm();if(form!=null&&form.Visible&&form.WindowState!=FormWindowState.Minimized){if(Target=="rear"&&Selection!=null&&IsOff(Selection()))return;Invalidate();}};}
+        public LivePreview(){DoubleBuffered=true;BackColor=Theme.Ivory;Height=170;AccessibleName="Graphical preview, not applied";animation.Interval=100;animation.Tick+=(s,e)=>{var form=FindForm();if(form!=null&&form.Visible&&form.WindowState!=FormWindowState.Minimized){if(Target=="rear"&&Selection!=null&&IsOff(Selection()))return;Invalidate();}};}
         protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);Animate=Visible&&FindForm()!=null&&FindForm().Visible;}
         protected override void Dispose(bool disposing){if(disposing)animation.Dispose();base.Dispose(disposing);}
         public static Color Hue(double h){h=(h%1+1)%1;double x=h*6;int i=(int)x;int f=(int)((x-i)*255);switch(i){case 0:return Color.FromArgb(255,f,0);case 1:return Color.FromArgb(255-f,255,0);case 2:return Color.FromArgb(0,255,f);case 3:return Color.FromArgb(0,255-f,255);case 4:return Color.FromArgb(f,0,255);default:return Color.FromArgb(255,0,255-f);}}

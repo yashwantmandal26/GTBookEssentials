@@ -449,6 +449,40 @@ namespace GTBook {
                     Check(signatures.Add(Convert.ToBase64String(wave)),"modes share identical audio");
                 }
             });
+            test("Rapid keyboard bursts retain only the newest pending state without concurrent execution",()=>{
+                System.Threading.Tasks.Task.Run(async ()=>{
+                    var release=new System.Threading.Tasks.TaskCompletionSource<bool>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+                    var seen=new System.Collections.Generic.List<int>();int active=0,maxActive=0;
+                    var pump=new LatestCommandPump<Request>(async request=>{active++;maxActive=Math.Max(maxActive,active);seen.Add(request.Brightness);if(seen.Count==1)await release.Task;active--;});
+                    var first=pump.Submit(new Request{Brightness=1});System.Threading.Tasks.Task last=first;
+                    for(int i=0;i<2000;i++)last=pump.Submit(new Request{Brightness=i%101});
+                    Check(seen.Count==1,"commands ran while the first was blocked");release.SetResult(true);await last;
+                    Check(seen.SequenceEqual(new[]{1,1999%101})&&maxActive==1,"burst backlog or concurrent hardware writes");
+                    await pump.Submit(new Request{Brightness=77});Check(seen.Last()==77,"pump did not rearm after drain");
+                }).GetAwaiter().GetResult();
+            });
+            test("Keyboard command pump propagates failure and can accept a later recovery",()=>{
+                System.Threading.Tasks.Task.Run(async ()=>{
+                    int calls=0;var pump=new LatestCommandPump<Request>(r=>{if(++calls==1)throw new IOException("simulated disconnect");return System.Threading.Tasks.Task.FromResult(true);});
+                    bool rejected=false;try{await pump.Submit(new Request());}catch(IOException){rejected=true;}
+                    await pump.Submit(new Request());Check(rejected&&calls==2,"failure was swallowed or pump stayed stuck");
+                }).GetAwaiter().GetResult();
+            });
+            test("Native keyboard helper serves a burst and rejects unrelated commands before device access",()=>{
+                var json=new JavaScriptSerializer();var input=new StringBuilder();for(int i=0;i<100;i++)input.AppendLine(json.Serialize(new Request{Action="keyboard",Brightness=i}));
+                input.AppendLine(json.Serialize(new Request{Action="gpu"}));input.AppendLine("bad json");int calls=0;var brokerOutput=new StringWriter();
+                NativeKeyboardBroker.Serve(new StringReader(input.ToString()),brokerOutput,r=>{Check(r.Brightness==calls++,"native command reordered");return new Reply{Ok=true};});
+                var replies=brokerOutput.ToString().Split(new[]{Environment.NewLine},StringSplitOptions.RemoveEmptyEntries).Select(line=>json.Deserialize<Reply>(line)).ToArray();
+                Check(calls==100&&replies.Length==102&&replies.Take(100).All(r=>r.Ok)&&replies.Skip(100).All(r=>!r.Ok),"invalid input reached the hardware executor");
+            });
+            test("Native keyboard broker reuses its process and recovers from a terminated helper",()=>{
+                int launches=0,id=0;
+                using(var broker=new NativeKeyboardBroker(()=>{launches++;return System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName,"--keyboard-worker-simulated"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true});})){
+                    for(int i=0;i<5;i++){Check(broker.Run(new Request{Action="keyboard",Brightness=i*20}).Ok,"broker request failed");if(i==0)id=broker.ProcessId;Check(broker.ProcessId==id,"helper restarted within a burst");}
+                    using(var helper=System.Diagnostics.Process.GetProcessById(id)){helper.Kill();Check(helper.WaitForExit(2000),"fixture helper failed to exit");}
+                    Check(broker.Run(new Request{Action="keyboard"}).Ok&&broker.ProcessId!=id&&launches==2,"helper did not recover after exit");
+                }
+            });
             test("Routine controls apply directly while GPU and startup retain confirmation",()=>{
                 foreach(string action in new[]{"mode","auto","fan","keyboard","keyboard-animation","rear","rear-off","rear-music","usb","windows-key","software-fn"})Check(!ConfirmationPolicy.Required(action),"unexpected confirmation: "+action);
                 Check(ConfirmationPolicy.Required("gpu")&&ConfirmationPolicy.Required("startup")&&ConfirmationPolicy.Required("future-command"),"important or unknown actions need confirmation");

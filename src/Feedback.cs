@@ -65,6 +65,7 @@ namespace GTBook {
         readonly System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer();readonly Stopwatch elapsed=Stopwatch.StartNew();
         readonly PopupMotion motion=new PopupMotion();readonly bool renderOnly;
         FeedbackNotice notice=new FeedbackNotice();
+        float brightnessFontSize;int brightnessFontDpi;Size brightnessFontClient;
         internal int DisplayedPercent{get{return notice.Percent;}}
         protected override bool ShowWithoutActivation{get{return true;}}
         protected override CreateParams CreateParams{get{var p=base.CreateParams;p.ExStyle|=0x08000000|0x80;return p;}}
@@ -94,6 +95,7 @@ namespace GTBook {
             }return 14;
         }
         protected override void OnPaint(PaintEventArgs e){
+            if(notice.Kind==FeedbackKind.Brightness||notice.Kind==FeedbackKind.KeyboardBrightness){PaintBrightness(e.Graphics);return;}
             var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;g.Clear(BackColor);float s=DeviceDpi/96f*VisualScale;
             var outer=new RectangleF(.5f*s,.5f*s,Width-s,Height-s);
             using(var path=Theme.Round(outer,23*s))using(var border=new LinearGradientBrush(outer,Color.FromArgb(255,181,45),Color.FromArgb(255,83,18),35f))g.FillPath(border,path);
@@ -133,6 +135,32 @@ namespace GTBook {
                 bar.Width*=(float)Math.Max(0,Math.Min(100,motion.Percent(elapsed.Elapsed.TotalMilliseconds)))/100f;if(bar.Width>0)using(var path=Theme.Round(bar,5*s))using(var brush=new LinearGradientBrush(bar,Color.FromArgb(255,175,36),Color.FromArgb(255,91,18),0f))g.FillPath(brush,path);
                 if(!primaryBrightness)TextAt(g,notice.Percent<0?"…":notice.Percent+"%",12,FontStyle.Bold,new RectangleF(Width-76*s,y-5*s,55*s,28*s),Theme.Ink,TextFormatFlags.Right);
             }
+        }
+        internal static RectangleF[] BrightnessLayout(Size size,float d){
+            return new[]{new RectangleF(14*d,18*d,38*d,38*d),new RectangleF(64*d,15*d,size.Width-169*d,44*d),new RectangleF(size.Width-105*d,12*d,90*d,50*d),new RectangleF(16*d,size.Height-26*d,size.Width-32*d,7*d)};
+        }
+        internal static float BrightnessValueSize(Graphics g,string value,RectangleF rect){
+            for(float size=24;size>=16;size-=.5f)using(var font=new Font("Segoe UI",size,FontStyle.Bold)){
+                var measured=TextRenderer.MeasureText(g,value,font,new Size(int.MaxValue,int.MaxValue),TextFormatFlags.SingleLine|TextFormatFlags.NoPadding);
+                if(measured.Width<=rect.Width&&measured.Height<=rect.Height)return size;
+            }return 16;
+        }
+        void PaintBrightness(Graphics g){
+            float d=DeviceDpi/96f;g.SmoothingMode=SmoothingMode.AntiAlias;g.Clear(BackColor);
+            var outer=new RectangleF(.5f*d,.5f*d,Width-d,Height-d);
+            using(var path=Theme.Round(outer,15*d))using(var border=new LinearGradientBrush(outer,Color.FromArgb(255,204,143),Color.FromArgb(244,119,42),30f))g.FillPath(border,path);
+            var inner=outer;inner.Inflate(-1.5f*d,-1.5f*d);
+            using(var path=Theme.Round(inner,13.5f*d))using(var fill=new LinearGradientBrush(inner,Theme.White,Color.FromArgb(255,249,241),80f))g.FillPath(fill,path);
+            var layout=BrightnessLayout(ClientSize,d);
+            using(var path=Theme.Round(layout[0],12*d))using(var fill=new LinearGradientBrush(layout[0],Color.FromArgb(255,241,219),Color.FromArgb(255,226,188),60f))g.FillPath(fill,path);
+            DrawIcon(g,new RectangleF(21*d,25*d,24*d,24*d),.8f*d);
+            TextAt(g,notice.ControlLabel.Replace(" ","\n"),9.5f/VisualScale,FontStyle.Bold,layout[1],Theme.Muted,TextFormatFlags.WordBreak|TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter);
+            string value=notice.Percent<0?"…":notice.Kind==FeedbackKind.KeyboardBrightness&&notice.Percent==0?"Off":notice.Percent+"%";
+            if(brightnessFontDpi!=DeviceDpi||brightnessFontClient!=ClientSize){brightnessFontSize=BrightnessValueSize(g,"100%",layout[2]);brightnessFontDpi=DeviceDpi;brightnessFontClient=ClientSize;}
+            TextAt(g,value,brightnessFontSize/VisualScale,FontStyle.Bold,layout[2],Theme.Ink,TextFormatFlags.SingleLine|TextFormatFlags.NoPadding|TextFormatFlags.Right|TextFormatFlags.VerticalCenter);
+            var track=layout[3];using(var path=Theme.Round(track,3.5f*d))using(var fill=new SolidBrush(Color.FromArgb(244,232,218)))g.FillPath(fill,path);
+            track.Width*=(float)Math.Max(0,Math.Min(100,motion.Percent(elapsed.Elapsed.TotalMilliseconds)))/100f;
+            if(track.Width>0)using(var path=Theme.Round(track,3.5f*d))using(var fill=new LinearGradientBrush(track,Color.FromArgb(255,184,75),Color.FromArgb(246,113,32),0f))g.FillPath(fill,path);
         }
         void DrawIcon(Graphics g,RectangleF r,float scale){
             using(var pen=new Pen(Color.FromArgb(214,88,15),2.4f*scale)){

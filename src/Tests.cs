@@ -523,6 +523,20 @@ namespace GTBook {
                 Check(new FeedbackNotice{Kind=FeedbackKind.KeyboardBrightness}.ControlLabel=="Keyboard brightness","keyboard label missing");
                 Check(new FeedbackNotice{Kind=FeedbackKind.Keyboard}.ControlLabel=="","effect should retain only its primary name");
             });
+            test("Compact brightness header separates icon, label and percentage at common DPI scales",()=>{
+                foreach(float scale in new[]{1f,1.25f,1.5f,2f}){
+                    var size=new System.Drawing.Size((int)(319*scale),(int)(109*scale));var layout=ShortcutToast.BrightnessLayout(size,scale);
+                    Check(layout[0].Right<layout[1].Left&&layout[1].Right<=layout[2].Left,"header overlaps");
+                    Check(layout[3].Bottom<size.Height&&layout[3].Top>layout[2].Bottom,"meter overlaps the header or bottom border");
+                    using(var image=new System.Drawing.Bitmap(1,1)){
+                        image.SetResolution(96*scale,96*scale);using(var g=System.Drawing.Graphics.FromImage(image))using(var font=new System.Drawing.Font("Segoe UI",9.5f,System.Drawing.FontStyle.Bold)){
+                            foreach(var word in new[]{"Screen","Keyboard","brightness"})Check(TextRenderer.MeasureText(g,word,font,new System.Drawing.Size(int.MaxValue,int.MaxValue),TextFormatFlags.SingleLine|TextFormatFlags.NoPadding).Width<=layout[1].Width,"brightness label clipped");
+                            Check(TextRenderer.MeasureText(g,"Keyboard\nbrightness",font,new System.Drawing.Size((int)layout[1].Width,int.MaxValue),TextFormatFlags.WordBreak|TextFormatFlags.NoPadding).Height<=layout[1].Height,"brightness label height clipped");
+                            foreach(var value in new[]{"0%","50%","100%","Off"})using(var numberFont=new System.Drawing.Font("Segoe UI",ShortcutToast.BrightnessValueSize(g,value,layout[2]),System.Drawing.FontStyle.Bold)){var measured=TextRenderer.MeasureText(g,value,numberFont,new System.Drawing.Size(int.MaxValue,int.MaxValue),TextFormatFlags.SingleLine|TextFormatFlags.NoPadding);Check(measured.Width<=layout[2].Width&&measured.Height<=layout[2].Height,"percentage clipped");}
+                        }
+                    }
+                }
+            });
             test("Routine controls apply directly while GPU and startup retain confirmation",()=>{
                 foreach(string action in new[]{"mode","auto","fan","keyboard","keyboard-animation","rear","rear-off","rear-music","usb","windows-key","software-fn"})Check(!ConfirmationPolicy.Required(action),"unexpected confirmation: "+action);
                 Check(ConfirmationPolicy.Required("gpu")&&ConfirmationPolicy.Required("startup")&&ConfirmationPolicy.Required("future-command"),"important or unknown actions need confirmation");

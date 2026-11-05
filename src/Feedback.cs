@@ -64,6 +64,7 @@ namespace GTBook {
         readonly System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer();readonly Stopwatch elapsed=Stopwatch.StartNew();
         readonly PopupMotion motion=new PopupMotion();readonly bool renderOnly;
         FeedbackNotice notice=new FeedbackNotice();
+        internal int DisplayedPercent{get{return notice.Percent;}}
         protected override bool ShowWithoutActivation{get{return true;}}
         protected override CreateParams CreateParams{get{var p=base.CreateParams;p.ExStyle|=0x08000000|0x80;return p;}}
         public ShortcutToast(bool renderOnly=false){
@@ -79,6 +80,7 @@ namespace GTBook {
         public void Notify(string message,int percent=-1){Notify(new FeedbackNotice{Title=message,Kind=percent>=0?FeedbackKind.Brightness:FeedbackKind.Message,Percent=percent});}
         public void Notify(FeedbackNotice value){
             double now=elapsed.Elapsed.TotalMilliseconds;bool visible=Visible;
+            if(visible&&value.IsPending&&value.Kind==FeedbackKind.Brightness&&notice.Kind==FeedbackKind.Brightness&&notice.Percent>=0){motion.Hold(now);timer.Interval=motion.NextTick(now);timer.Start();return;}
             motion.Update(now,visible,value.Percent,value.IsPending?10000:2400);notice=value;AccessibleName=value.Title+" "+value.Detail;
             var handle=Handle;PlacePopup();Opacity=Math.Max(.01,motion.Opacity(now));
             if(!visible){Show();PlacePopup();}Invalidate();timer.Interval=16;timer.Start();
@@ -120,11 +122,11 @@ namespace GTBook {
                     var key=new RectangleF(22*s+z*cell,y+row*13*s,cell-7*s,10*s);
                     using(var path=Theme.Round(key,3*s))using(var brush=new SolidBrush(notice.Zones[z]))g.FillPath(brush,path);
                 }
-            }else if(notice.Percent>=0){
+            }else if(notice.Percent>=0||notice.Kind==FeedbackKind.Brightness){
                 bool keyboardBrightness=notice.Kind==FeedbackKind.KeyboardBrightness;
                 var bar=new RectangleF(22*s,y+3*s,Width-(keyboardBrightness?44:105)*s,keyboardBrightness?13*s:10*s);using(var path=Theme.Round(bar,5*s))using(var brush=new SolidBrush(Theme.Pearl))g.FillPath(brush,path);
                 bar.Width*=(float)Math.Max(0,Math.Min(100,motion.Percent(elapsed.Elapsed.TotalMilliseconds)))/100f;if(bar.Width>0)using(var path=Theme.Round(bar,5*s))using(var brush=new LinearGradientBrush(bar,Color.FromArgb(255,175,36),Color.FromArgb(255,91,18),0f))g.FillPath(brush,path);
-                if(!keyboardBrightness)TextAt(g,notice.Percent+"%",12,FontStyle.Bold,new RectangleF(Width-76*s,y-5*s,55*s,28*s),Theme.Ink,TextFormatFlags.Right);
+                if(!keyboardBrightness)TextAt(g,notice.Percent<0?"…":notice.Percent+"%",12,FontStyle.Bold,new RectangleF(Width-76*s,y-5*s,55*s,28*s),Theme.Ink,TextFormatFlags.Right);
             }else TextAt(g,notice.Kind==FeedbackKind.Error?"Your previous setting is not confirmed.":"GTBOOK Essentials",8,FontStyle.Regular,new RectangleF(22*s,y,Width-44*s,26*s),Theme.Muted);
         }
         void DrawIcon(Graphics g,RectangleF r,float scale){

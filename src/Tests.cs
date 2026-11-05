@@ -499,6 +499,18 @@ namespace GTBook {
                 }
                 Check(NativeKeyboardBroker.Supports(new Request{Action="mode"})&&NativeKeyboardBroker.Supports(new Request{Action="fan"})&&!NativeKeyboardBroker.Supports(new Request{Action="gpu"}),"wrong persistent helper command boundaries");
             });
+            test("Brightness pending updates preserve the visible confirmed meter instead of removing it",()=>{
+                using(var toast=new ShortcutToast(true)){
+                    toast.Location=new System.Drawing.Point(-32000,-32000);
+                    toast.Notify(new FeedbackNotice{Kind=FeedbackKind.Brightness,Title="Screen brightness",Percent=50});
+                    for(int i=0;i<30;i++){
+                        toast.Notify(FeedbackNotice.Pending(new Request{Action="screen-brightness",Step=i%2==0?10:-10}));
+                        Check(toast.Visible&&toast.DisplayedPercent==50&&toast.Opacity>=.999,"pending brightness hid/reset the meter");
+                    }
+                    toast.Notify(new FeedbackNotice{Kind=FeedbackKind.Brightness,Title="Screen brightness",Percent=60});Check(toast.DisplayedPercent==60,"confirmed value did not replace previous value");
+                }
+                var motion=new PopupMotion();motion.Update(0,false,20);motion.Update(200,true,80);double before=motion.Percent(250);motion.Hold(250);Check(motion.Percent(250)==before&&motion.Percent(360)==80&&!motion.Expired(9000),"pending hold restarted the meter or its expiry");
+            });
             test("Routine controls apply directly while GPU and startup retain confirmation",()=>{
                 foreach(string action in new[]{"mode","auto","fan","keyboard","keyboard-animation","rear","rear-off","rear-music","usb","windows-key","software-fn"})Check(!ConfirmationPolicy.Required(action),"unexpected confirmation: "+action);
                 Check(ConfirmationPolicy.Required("gpu")&&ConfirmationPolicy.Required("startup")&&ConfirmationPolicy.Required("future-command"),"important or unknown actions need confirmation");

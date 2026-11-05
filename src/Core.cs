@@ -14,6 +14,7 @@ namespace GTBook {
     public sealed class Request {
         public string Action = "probe";
         public string Feedback = "";
+        public long FeedbackSequence;
         public string KeyboardSession = "";
         public bool ArmKeyboardAwake = true;
         public int Mode = 1;
@@ -88,8 +89,8 @@ namespace GTBook {
     public sealed class Identity {
         public string Manufacturer, Model, Bios;
         public bool Supported { get { return (Manufacturer??"").IndexOf("INFINIX", StringComparison.OrdinalIgnoreCase) >= 0 && string.Equals(Model,"GL613",StringComparison.OrdinalIgnoreCase) && Bios == "1.00"; } }
-        static readonly Lazy<Identity> cached=new Lazy<Identity>(ReadCore);
-        public static Identity Read(){var value=cached.Value;return new Identity{Manufacturer=value.Manufacturer,Model=value.Model,Bios=value.Bios};}
+        static readonly object identityGate=new object();static Identity cached;
+        public static Identity Read(){lock(identityGate){if(cached==null)cached=ReadCore();return new Identity{Manufacturer=cached.Manufacturer,Model=cached.Model,Bios=cached.Bios};}}
         static Identity ReadCore() {
             using (var systems = new ManagementObjectSearcher("SELECT Manufacturer, Model FROM Win32_ComputerSystem"))
             using (var result = systems.Get())
@@ -99,6 +100,12 @@ namespace GTBook {
                 return new Identity { Manufacturer = Convert.ToString(s["Manufacturer"]).Trim(), Model = Convert.ToString(s["Model"]).Trim(), Bios = Convert.ToString(b["SMBIOSBIOSVersion"]).Trim() };
             }
         }
+    }
+    public sealed class NativeDevices : IDisposable {
+        OemProtocol oem;KeyboardDevice keyboard;
+        public OemProtocol Oem{get{return oem??(oem=new OemProtocol());}}
+        public KeyboardDevice Keyboard{get{return keyboard??(keyboard=new KeyboardDevice());}}
+        public void Dispose(){if(keyboard!=null){keyboard.Dispose();keyboard=null;}if(oem!=null){oem.Dispose();oem=null;}}
     }
     public static class Hardware {
         static uint Telemetry(Func<uint> read){using(var lease=new HardwareLease()){if(!lease.Acquire(0))throw new IOException("Device busy; reading deferred.");try{return read();}finally{lease.Release();}}}
@@ -138,7 +145,7 @@ namespace GTBook {
             catch (TargetInvocationException ex) { throw ex.InnerException ?? ex; }
         }
         static string Temperature(uint raw) { return raw >= 1 && raw <= 125 ? raw + " °C" : "Unavailable"; }
-        public static Reply Execute(Request r) {
+        public static Reply Execute(Request r,NativeDevices reuse=null) {
             Protocol.Validate(r);
             if(r.Action=="device-info")return DeviceInformation.Read();
             if(r.Action=="screen-brightness")return DisplayBrightness.Change(r.Step);
@@ -153,29 +160,32 @@ namespace GTBook {
             if (!id.Supported) throw new InvalidOperationException("Native controls currently support INFINIX GL613 BIOS 1.00. Detected: " + id.Model + ", " + id.Bios + ". Use the official app for this firmware.");
             if (conflict.Length > 0) throw new InvalidOperationException(conflict);
             if(r.Action=="keyboard-animation")return KeyboardAnimation.Run(r);
+            if(reuse!=null)return ExecuteDevice(r,answer,reuse);
+            using(var owned=new NativeDevices())return ExecuteDevice(r,answer,owned);
+        }
+        static Reply ExecuteDevice(Request r,Reply answer,NativeDevices devices){
             // One worker owns all transports. The original app does not honour our mutex,
             // so ownership is also checked immediately before each action.
             if (r.Action == "keyboard") {
                 if(ExtraEffects.Contains(r.Effect))throw new ArgumentException("Extra effects require the keyboard animation worker.");
                 using(var ownership=new HardwareLease(@"Global\GTBookStableKeyboard")){
                 if(!ownership.Acquire(0))throw new IOException("Stop the active Extra animation before sending a native keyboard command.");
-                using(var gate=(OemProtocol)Oem()) {gate.KeyLight(r.Brightness>0); }
-                using (var keyboard = new KeyboardDevice()) {
-                    foreach(var packet in Protocol.NativeKeyboardPackets(r))keyboard.Send(packet);
-                }
+                devices.Oem.KeyLight(r.Brightness>0);
+                foreach(var packet in Protocol.NativeKeyboardPackets(r))devices.Keyboard.Send(packet);
                 answer.Message = "Keyboard command sent • " + r.Effect + ", " + r.Brightness + "% (visual confirmation needed).";
                 return answer;
                 }
             }
-            using(var native = (OemProtocol)Oem()) {
+            var native=devices.Oem;{
             object oem=native;
             if (r.Action == "mode") {
                 var confirmed=PerformanceModes.Apply(native,r.Mode,Thread.Sleep);
                 answer.Message=confirmed.Message;answer.Data["mode"]=confirmed.Data["mode"];
             } else if (r.Action == "auto" || r.Action=="fan") {
                 bool enabled=r.Action=="fan" && r.Enabled;
-                Call(oem, "SetFanFullMode", enabled); Thread.Sleep(100);
-                if (Call(oem, "GetFanFullMode") != (enabled?1u:0u)) throw new IOException("Firmware did not confirm cooling mode.");
+                Call(oem, "SetFanFullMode", enabled);bool matched=false;
+                for(int attempt=0;attempt<8;attempt++){if(attempt>0)Thread.Sleep(100);if(Call(oem,"GetFanFullMode")== (enabled?1u:0u)){matched=true;break;}}
+                if (!matched) throw new IOException("Firmware did not confirm cooling mode.");
                 answer.Message = enabled?"Fan Max confirmed.":"Automatic firmware cooling confirmed.";
                 answer.Data["cooling"]=enabled?"Full fan override":"Firmware auto";
             } else if(r.Action=="usb") {
@@ -240,7 +250,7 @@ namespace GTBook {
         static readonly Lazy<NativeKeyboardBroker> keyboard=new Lazy<NativeKeyboardBroker>(()=>new NativeKeyboardBroker());
         public static void DisposeShared(){if(brightness.IsValueCreated)brightness.Value.Dispose();if(keyboard.IsValueCreated)keyboard.Value.Dispose();}
         public static Reply Run(Request request, int timeout = 12000, WaitHandle stop = null) {
-            try {if(request.Action=="screen-brightness"){Protocol.Validate(request);return brightness.Value.Run(request.Step);}if(request.Action=="keyboard")return keyboard.Value.Run(request);return RunCore(request,timeout,stop);}catch(Exception e){return Reply.Fail("Hardware helper could not complete: "+e.Message);}
+            try {if(request.Action=="screen-brightness"){Protocol.Validate(request);return brightness.Value.Run(request.Step);}if(NativeKeyboardBroker.Supports(request))return keyboard.Value.Run(request);return RunCore(request,timeout,stop);}catch(Exception e){return Reply.Fail("Hardware helper could not complete: "+e.Message);}
         }
         static Reply RunCore(Request request, int timeout, WaitHandle stop) {
             string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(request)));

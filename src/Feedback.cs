@@ -14,6 +14,13 @@ namespace GTBook {
         public string Title="",Detail="";
         public int Percent=-1,Mode=-1;
         public Color[] Zones;
+        public bool IsPending;
+        public static FeedbackNotice Pending(Request request){
+            if(request.Action=="mode")return new FeedbackNotice{Kind=FeedbackKind.Mode,Title="Switching to "+PerformanceModes.Names[request.Mode],Detail="Applying · waiting for hardware",Mode=-1,IsPending=true};
+            if(request.Action=="screen-brightness")return new FeedbackNotice{Kind=FeedbackKind.Brightness,Title="Screen brightness",Detail=request.Step>0?"Increasing…":"Decreasing…",IsPending=true};
+            if(request.Action=="auto"||request.Action=="fan"||request.Action=="usb")return new FeedbackNotice{Title=request.Action=="usb"?"USB charging "+(request.Enabled?"ON":"OFF"):request.Action=="auto"?"Automatic cooling":"Maximum fans",Detail="Applying · waiting for hardware",IsPending=true};
+            var notice=Applied(request,new Reply{Ok=true});notice.IsPending=true;notice.Detail="Applying · waiting for hardware";return notice;
+        }
         public static FeedbackNotice Applied(Request r,Reply reply){
             if(!reply.Ok)return new FeedbackNotice{Kind=FeedbackKind.Error,Title="Couldn't apply that",Detail=reply.Message};
             if(r.Action=="mode"){
@@ -53,6 +60,7 @@ namespace GTBook {
         public void Dispose(){foreach(var player in players){player.Stop();player.Dispose();}foreach(var stream in streams)stream.Dispose();}
     }
     public sealed class ShortcutToast : Form {
+        public const float VisualScale=.92f;
         readonly System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer();readonly Stopwatch elapsed=Stopwatch.StartNew();
         readonly PopupMotion motion=new PopupMotion();readonly bool renderOnly;
         FeedbackNotice notice=new FeedbackNotice();
@@ -60,30 +68,30 @@ namespace GTBook {
         protected override CreateParams CreateParams{get{var p=base.CreateParams;p.ExStyle|=0x08000000|0x80;return p;}}
         public ShortcutToast(bool renderOnly=false){
             this.renderOnly=renderOnly;
-            FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;ShowInTaskbar=false;TopMost=true;DoubleBuffered=true;AutoScaleMode=AutoScaleMode.Dpi;ClientSize=new Size(480,164);BackColor=Theme.Ivory;
+            FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;ShowInTaskbar=false;TopMost=true;DoubleBuffered=true;AutoScaleMode=AutoScaleMode.Dpi;ClientSize=new Size(442,151);BackColor=Theme.Ivory;
             UpdateShape();
             timer.Interval=16;timer.Tick+=(s,e)=>{double ms=elapsed.Elapsed.TotalMilliseconds;if(motion.Expired(ms)){Hide();timer.Stop();return;}double alpha=Math.Max(.01,motion.Opacity(ms));if(Math.Abs(Opacity-alpha)>.001)Opacity=alpha;Invalidate();timer.Interval=motion.NextTick(ms);};
         }
-        void UpdateShape(){if(Width<=0||Height<=0)return;using(var path=Theme.Round(new RectangleF(0,0,Width,Height),23*DeviceDpi/96f)){var previous=Region;Region=new Region(path);if(previous!=null)previous.Dispose();}}
+        void UpdateShape(){if(Width<=0||Height<=0)return;using(var path=Theme.Round(new RectangleF(0,0,Width,Height),23*DeviceDpi/96f*VisualScale)){var previous=Region;Region=new Region(path);if(previous!=null)previous.Dispose();}}
         void PlacePopup(){if(renderOnly)return;var screen=Screen.PrimaryScreen??Screen.FromHandle(Handle);Location=PopupLayout.BottomCenter(screen.WorkingArea,Size,(int)(36*DeviceDpi/96f));}
         protected override void OnShown(EventArgs e){base.OnShown(e);PlacePopup();}
         protected override void OnSizeChanged(EventArgs e){base.OnSizeChanged(e);UpdateShape();if(Visible)PlacePopup();}
         public void Notify(string message,int percent=-1){Notify(new FeedbackNotice{Title=message,Kind=percent>=0?FeedbackKind.Brightness:FeedbackKind.Message,Percent=percent});}
         public void Notify(FeedbackNotice value){
             double now=elapsed.Elapsed.TotalMilliseconds;bool visible=Visible;
-            motion.Update(now,visible,value.Percent);notice=value;AccessibleName=value.Title+" "+value.Detail;
+            motion.Update(now,visible,value.Percent,value.IsPending?10000:2400);notice=value;AccessibleName=value.Title+" "+value.Detail;
             var handle=Handle;PlacePopup();Opacity=Math.Max(.01,motion.Opacity(now));
             if(!visible){Show();PlacePopup();}Invalidate();timer.Interval=16;timer.Start();
         }
-        void TextAt(Graphics g,string text,float size,FontStyle style,RectangleF rect,Color color,TextFormatFlags flags=TextFormatFlags.EndEllipsis){using(var font=new Font("Segoe UI",size,style))TextRenderer.DrawText(g,text,font,Rectangle.Round(rect),color,TextFormatFlags.NoPrefix|flags);}
+        void TextAt(Graphics g,string text,float size,FontStyle style,RectangleF rect,Color color,TextFormatFlags flags=TextFormatFlags.EndEllipsis){using(var font=new Font("Segoe UI",size*VisualScale,style))TextRenderer.DrawText(g,text,font,Rectangle.Round(rect),color,TextFormatFlags.NoPrefix|flags);}
         internal static float FittedTitleSize(Graphics g,string text,RectangleF rect){
-            for(float size=25;size>=14;size-=.5f)using(var font=new Font("Segoe UI",size,FontStyle.Bold)){
+            for(float size=25;size>=14;size-=.5f)using(var font=new Font("Segoe UI",size*VisualScale,FontStyle.Bold)){
                 var measured=TextRenderer.MeasureText(g,text,font,new Size(int.MaxValue,int.MaxValue),TextFormatFlags.NoPadding|TextFormatFlags.SingleLine|TextFormatFlags.NoPrefix);
                 if(measured.Width<=rect.Width&&measured.Height<=rect.Height)return size;
             }return 14;
         }
         protected override void OnPaint(PaintEventArgs e){
-            var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;g.Clear(BackColor);float s=DeviceDpi/96f;
+            var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;g.Clear(BackColor);float s=DeviceDpi/96f*VisualScale;
             var outer=new RectangleF(.5f*s,.5f*s,Width-s,Height-s);
             using(var path=Theme.Round(outer,23*s))using(var border=new LinearGradientBrush(outer,Color.FromArgb(255,181,45),Color.FromArgb(255,83,18),35f))g.FillPath(border,path);
             var inner=outer;inner.Inflate(-3*s,-3*s);using(var path=Theme.Round(inner,20*s))using(var fill=new SolidBrush(Theme.White))g.FillPath(fill,path);
@@ -91,7 +99,7 @@ namespace GTBook {
             DrawIcon(g,new RectangleF(31*s,32*s,30*s,30*s),s);
             bool keyboard=notice.Kind==FeedbackKind.Keyboard||notice.Kind==FeedbackKind.KeyboardBrightness;
             if(keyboard){
-                TextAt(g,notice.Kind==FeedbackKind.Keyboard?"KEYBOARD EFFECT":"KEYBOARD BRIGHTNESS",8,FontStyle.Bold,new RectangleF(91*s,15*s,Width-113*s,20*s),Theme.OrangeInk);
+                TextAt(g,(notice.Kind==FeedbackKind.Keyboard?"KEYBOARD EFFECT":"KEYBOARD BRIGHTNESS")+(notice.IsPending?" · APPLYING":""),8,FontStyle.Bold,new RectangleF(91*s,15*s,Width-113*s,20*s),Theme.OrangeInk);
                 var title=PopupLayout.KeyboardTitle(ClientSize,s);
                 TextAt(g,notice.Title,FittedTitleSize(g,notice.Title,title),FontStyle.Bold,title,Theme.Ink,TextFormatFlags.SingleLine|TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter);
                 TextAt(g,notice.Detail,9,FontStyle.Regular,new RectangleF(92*s,82*s,Width-114*s,24*s),Theme.Muted);
@@ -134,10 +142,11 @@ namespace GTBook {
         public static void RenderExamples(string directory){
             Directory.CreateDirectory(directory);using(var toast=new ShortcutToast(true)){
                 toast.Location=new Point(-32000,-32000);toast.Show();toast.timer.Stop();toast.Opacity=1;
-                for(int i=0;i<9;i++){
+                for(int i=0;i<11;i++){
                     Request r=i<3?new Request{Action="mode",Mode=i}:new Request{Action=i==3?"screen-brightness":"keyboard",Effect=i==5?"Clock":"Rainbow",Brightness=i==5?50:i==6?0:100};var reply=new Reply{Ok=true};if(i<3)reply.Data["mode"]=new[]{"Quiet","Balanced","Gaming"}[i];else reply.Data["display-brightness"]="70";
                     if(i==5||i==6)r.Feedback="keyboard-brightness";if(i==7)r.Effect="Magnetic Slingshot";if(i==8)r.Effect="Orbital Eclipse";
-                    toast.notice=FeedbackNotice.Applied(r,reply);toast.motion.Update(toast.elapsed.Elapsed.TotalMilliseconds,false,toast.notice.Percent);using(var image=new Bitmap(toast.Width,toast.Height)){toast.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));image.Save(Path.Combine(directory,"Toast-"+i+".png"));}
+                    if(i==9){r.Action="mode";r.Mode=2;}if(i==10)r.Feedback="keyboard-brightness";
+                    toast.notice=i>=9?FeedbackNotice.Pending(r):FeedbackNotice.Applied(r,reply);toast.motion.Update(toast.elapsed.Elapsed.TotalMilliseconds,false,toast.notice.Percent);using(var image=new Bitmap(toast.Width,toast.Height)){toast.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));image.Save(Path.Combine(directory,"Toast-"+i+".png"));}
                 }
             }
         }

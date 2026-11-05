@@ -377,7 +377,7 @@ namespace GTBook {
                     })){
                         var reply=PerformanceModes.Apply(oem,mode,ms=>{Check(ms==100,"bounded retry spacing");waits++;});
                         Check(reply.Ok&&reply.Data["mode"]==PerformanceModes.Names[mode],"wrong confirmed mode");
-                        Check(writes.SequenceEqual(new[]{mode})&&reads==3&&waits==3,"write or read-back retry sequence");
+                        Check(writes.SequenceEqual(new[]{mode})&&reads==3&&waits==2,"write or read-back retry sequence");
                     }
                 }
             });
@@ -425,7 +425,7 @@ namespace GTBook {
                     using(var graphics=System.Drawing.Graphics.FromImage(bitmap))foreach(string name in ExtraEffects.Names.Concat(new[]{"Four zones","Breathing","100%","Off"})){
                         var rect=PopupLayout.KeyboardTitle(new System.Drawing.Size((int)(480*scale),(int)(164*scale)),scale);
                         float size=ShortcutToast.FittedTitleSize(graphics,name,rect);
-                        using(var font=new System.Drawing.Font("Segoe UI",size,System.Drawing.FontStyle.Bold)){
+                        using(var font=new System.Drawing.Font("Segoe UI",size*ShortcutToast.VisualScale,System.Drawing.FontStyle.Bold)){
                             var measured=TextRenderer.MeasureText(graphics,name,font,new System.Drawing.Size(int.MaxValue,int.MaxValue),TextFormatFlags.NoPadding|TextFormatFlags.SingleLine|TextFormatFlags.NoPrefix);
                             Check(size>=18&&measured.Width<=rect.Width&&measured.Height<=rect.Height,"title clipped: "+name+" at "+scale);
                             Check(rect.Bottom<=82*scale,"title overlaps the detail");
@@ -483,6 +483,22 @@ namespace GTBook {
                     Check(broker.Run(new Request{Action="keyboard"}).Ok&&broker.ProcessId!=id&&launches==2,"helper did not recover after exit");
                 }
             });
+            test("Pending feedback is explicit and does not announce hardware success",()=>{
+                foreach(var request in new[]{new Request{Action="mode",Mode=2},new Request{Action="keyboard",Effect="Rainbow"},new Request{Action="screen-brightness",Step=10},new Request{Action="fan",Enabled=true}}){
+                    var pending=FeedbackNotice.Pending(request);Check(pending.IsPending&&!pending.Detail.Contains("confirmed"),"pending message announced success");
+                }
+                var mode=FeedbackNotice.Pending(new Request{Action="mode",Mode=2});Check(mode.Mode==-1,"pending mode must not highlight a confirmed mode");
+                var motion=new PopupMotion();motion.Update(0,false,-1,10000);Check(motion.Opacity(0)==1&&!motion.Expired(9000),"pending feedback must be immediately readable and remain visible");
+            });
+            test("Popup dimensions are eight percent smaller with all contents using the same scale",()=>{
+                using(var toast=new ShortcutToast(true))Check(toast.ClientSize.Width==442&&toast.ClientSize.Height==151&&Math.Abs(ShortcutToast.VisualScale-.92)<.001,"wrong compact popup size");
+            });
+            test("Confirmed performance writes do not wait before their first read-back",()=>{
+                int delays=0;using(var oem=new OemProtocol((method,b)=>b[15]==160&&b[13]==0?2u:0u)){
+                    Check(PerformanceModes.Apply(oem,2,ms=>delays++).Ok&&delays==0,"unnecessary initial mode delay");
+                }
+                Check(NativeKeyboardBroker.Supports(new Request{Action="mode"})&&NativeKeyboardBroker.Supports(new Request{Action="fan"})&&!NativeKeyboardBroker.Supports(new Request{Action="gpu"}),"wrong persistent helper command boundaries");
+            });
             test("Routine controls apply directly while GPU and startup retain confirmation",()=>{
                 foreach(string action in new[]{"mode","auto","fan","keyboard","keyboard-animation","rear","rear-off","rear-music","usb","windows-key","software-fn"})Check(!ConfirmationPolicy.Required(action),"unexpected confirmation: "+action);
                 Check(ConfirmationPolicy.Required("gpu")&&ConfirmationPolicy.Required("startup")&&ConfirmationPolicy.Required("future-command"),"important or unknown actions need confirmation");
@@ -510,7 +526,7 @@ namespace GTBook {
                 keys.Feed(0x72,true,false,false,8000);keys.CancelHold();Check(keys.Poll(false,12000)==null,"cancelled hold survived");
             });
             test("Continuous notifications preserve opacity and extend the popup lifetime",()=>{
-                var motion=new PopupMotion();motion.Update(0,false,20);Check(motion.Opacity(0)==0&&motion.Opacity(140)==1,"first appearance");
+                var motion=new PopupMotion();motion.Update(0,false,20);Check(motion.Opacity(0)==1&&motion.Opacity(140)==1,"first appearance");
                 for(int ms=200;ms<=5000;ms+=100){double before=motion.Opacity(ms);motion.Update(ms,true,ms%100);Check(motion.Opacity(ms)==before&&before==1&&!motion.Expired(ms),"visible update restarted the fade");}
                 Check(!motion.Expired(7619)&&motion.Expired(7620),"hide must follow the final update");
                 motion.Update(8000,false,10);double fading=motion.Opacity(10500);Check(fading>0&&fading<1,"fade-out sample");motion.Update(10500,true,80);

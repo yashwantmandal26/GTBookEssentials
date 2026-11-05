@@ -9,7 +9,7 @@ namespace GTBook {
         public static Reply Apply(OemProtocol oem,int mode,Action<int> delay){
             if(mode<0||mode>2)throw new ArgumentException("Unknown performance mode.");
             oem.SetPerformanceMode(mode);uint actual=255;
-            for(int i=0;i<8;i++){delay(100);actual=oem.GetPerformanceMode();if(actual==mode){var result=new Reply{Ok=true,Message="Power mode confirmed · "+Names[mode]};result.Data["mode"]=Names[mode];return result;}}
+            for(int i=0;i<8;i++){if(i>0)delay(100);actual=oem.GetPerformanceMode();if(actual==mode){var result=new Reply{Ok=true,Message="Power mode confirmed · "+Names[mode]};result.Data["mode"]=Names[mode];return result;}}
             throw new IOException("Power mode read-back did not match. Current raw value: "+actual+". Refresh before retrying.");
         }
     }

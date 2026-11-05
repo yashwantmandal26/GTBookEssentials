@@ -1,6 +1,15 @@
 # Release validation
 
-Candidate: 2.0.0-rc.9. Hardware profile: INFINIX GL613 / BIOS 1.00.
+Candidate: 2.0.0-rc.10. Hardware profile: INFINIX GL613 / BIOS 1.00.
+
+## RC10 immediate feedback and warm device sessions
+
+- User feedback found RC9 still felt delayed. RC10 addresses additional causes; it is not yet a measured high-load hardware improvement.
+- Popups are 442 x 151 logical pixels (approximately 8% smaller in each dimension). Fonts, geometry and long-name fitting use the same 0.92 scale. Initial feedback opens fully readable rather than waiting for a UI-timer fade-in. Pending notices remain visible while work is running, and stale keyboard completions cannot replace feedback for a newer input.
+- Input immediately shows an explicitly pending message. Mode selection/chime and success wording still require firmware acknowledgement.
+- Native keyboard, performance, cooling and USB actions share a helper and WMI/HID resources for up to 15 idle seconds; failures discard device handles. Successful model identity is cached; failed discovery is retried on a later command.
+- Performance/cooling read-back starts immediately after the write, retaining bounded retries if it has not latched. Mode helper starts and device enumeration are avoided on warm bursts.
+- 92 local software checks pass, including compact layout, immediate/pending feedback semantics and first-read confirmation without a forced delay. Real sustained CPU-load keyboard/mode latency remains pending user validation.
 
 ## RC9 responsiveness and command reliability
 
@@ -40,7 +49,7 @@ Candidate: 2.0.0-rc.9. Hardware profile: INFINIX GL613 / BIOS 1.00.
 - EC lighting gates are written only when their state changes. Timeout-disable packets no longer carry RGB/brightness payload and are not reissued on each shortcut in the same active app session. Initial static-zone setup remains once when entering a fresh Extra connection, as required by the reviewed controller path.
 - Wide/full-screen Lighting places keyboard and rear controls beside each other. The 1920-pixel wide layout and compact fallback passed geometry checks and DPI-aware visual rendering. Group headers open their effect list and use large chevrons; Four zones marks its extra zone settings.
 - USB settings have dedicated ON/OFF controls and highlights based only on confirmed firmware values. The exact OEM EC/SMI write path is followed by bounded repeated firmware read-back. Optional installer -VerifyUsb checks both states and restores the original setting.
-- RC5 installed successfully (2.0.0.8), with the installed EXE hash matching the packaged EXE. The user reported that the new layout/effect picker and F3 brightness/effect transitions are now good.
+- RC5 installed successfully (2.0.0.9), with the installed EXE hash matching the packaged EXE. The user reported that the new layout/effect picker and F3 brightness/effect transitions are now good.
 - On-device USB verification confirmed OFF and ON through the OEM firmware path, then restored the original OFF setting; report ok=true and original_restored=true. Real shutdown USB power remains pending a physical phone/port test. Firmware read-back does not measure the voltage/current of a shut-down USB port.
 
 ## RC4 feedback and device details
@@ -62,7 +71,7 @@ Candidate: 2.0.0-rc.9. Hardware profile: INFINIX GL613 / BIOS 1.00.
 - Extra animation active, two app processes: 66.91 MiB total private bytes and 96.95 MiB summed working sets; 1015.625 ms CPU over 30.27 seconds (3.356% of one logical core). UI was visible; this is not a native-effects tray-idle or battery-life measurement, and summed working sets can include shared pages.
 - RC2 corrects an observed transient hardware-lock collision during Extra animation and changes button background compositing. 64 desktop software checks pass; release-tooling checks cover parse/new-install/upgrade atomic writes and cleanup. RC2 still needs application and live visual verification.
 - RC3 additionally clears every custom-button paint surface, uses an opaque bevel shadow, keeps orange selected fills during temporary disable, closes the verified OEM UI at administrator startup/open, and refreshes visible readings at 5s AC / 10s battery without stopping music. 69 desktop software checks and 68 headless checks pass. New tests exercise paint-only repaint, persistent orange fill, strict OEM identity matching, graceful/fallback shutdown ordering and polling policy.
-- RC3 (file version 2.0.0.8) was installed and inspected live on 4 November 2026: black button leftovers were absent, Overview and Gaming remained orange-selected, and readings changed without a Refresh click (CPU 45→48°C, GPU 40→41°C, GPU fan 2000→1900 RPM). The user confirmed that opening Essentials automatically closed official Control Center.
+- RC3 (file version 2.0.0.9) was installed and inspected live on 4 November 2026: black button leftovers were absent, Overview and Gaming remained orange-selected, and readings changed without a Refresh click (CPU 45→48°C, GPU 40→41°C, GPU fan 2000→1900 RPM). The user confirmed that opening Essentials automatically closed official Control Center.
 
 ## Release gates
 

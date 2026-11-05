@@ -147,6 +147,7 @@ namespace GTBook
         private readonly LatestCommandPump<Request> keyboardCommands;
         private bool refreshingReadings;
         private int settingsRevision;
+        private long keyboardFeedbackSequence;
 
 		private readonly RearPresentation rearState = new RearPresentation();
 
@@ -960,7 +961,7 @@ namespace GTBook
 			try
 			{
                 var request=Copy(keyboard,"keyboard");request.Feedback=action;
-				await keyboardCommands.Submit(request);
+				await QueueKeyboard(request);
 			}
 			finally
 			{
@@ -972,7 +973,8 @@ namespace GTBook
 			}
 		}
 
-		private void SyncKeyboardEditor()
+		private Task QueueKeyboard(Request request){request.FeedbackSequence=++keyboardFeedbackSequence;shortcutToast.Notify(FeedbackNotice.Pending(request));return keyboardCommands.Submit(request);}
+        private void SyncKeyboardEditor()
 		{
 			syncingKeyboardChoice = true;
 			try
@@ -1388,7 +1390,7 @@ namespace GTBook
 			{
                 if(busy)return;
                 applyKeyboardButton.Enabled=false;
-                try{await keyboardCommands.Submit(Copy(keyboard,"keyboard"));}finally{if(!IsDisposed)applyKeyboardButton.Enabled=true;}
+                try{await QueueKeyboard(Copy(keyboard,"keyboard"));}finally{if(!IsDisposed)applyKeyboardButton.Enabled=true;}
 			});
             applyKeyboardButton=(RaisedButton)button;
             applyKeyboardButton.Accent=Color.FromArgb(244,117,20);
@@ -1550,7 +1552,7 @@ namespace GTBook
 		{
 			Request request = new Request();
 			request.Action = action;
-            request.Feedback = r.Feedback;
+            request.Feedback = r.Feedback;request.FeedbackSequence=r.FeedbackSequence;
 			request.Effect = r.Effect;
 			request.Colors = (string[])r.Colors.Clone();
 			request.Brightness = r.Brightness;
@@ -2344,6 +2346,7 @@ namespace GTBook
 
         private void NotifyApplied(Request request,Reply reply)
         {
+            if(request.FeedbackSequence!=0&&request.FeedbackSequence!=keyboardFeedbackSequence)return;
             if(IsDisposed)return;
             var notice=FeedbackNotice.Applied(request,reply);
             if(notice.Kind==FeedbackKind.Mode){
@@ -2393,7 +2396,7 @@ namespace GTBook
 		private async Task Run(Request r, string saveName, bool background = false, bool fromShortcut = false)
 		{
             if(background&&r.Action=="refresh"){await RefreshReadings();return;}
-            if(!background)settingsRevision++;
+            if(!background){settingsRevision++;if(r.Action=="mode"||r.Action=="screen-brightness"||r.Action=="auto"||r.Action=="fan"||r.Action=="usb")shortcutToast.Notify(FeedbackNotice.Pending(r));}
 			if (preview)
 			{
 				status.Text = "Layout preview does not access hardware.";

@@ -10,10 +10,10 @@ namespace GTBook {
         public double Percent(double milliseconds){return targetPercent<0?-1:fromPercent+(targetPercent-fromPercent)*Ease((milliseconds-appeared)/160);}
         public bool Expired(double milliseconds){return milliseconds>=deadline+220;}
         public int NextTick(double milliseconds){return milliseconds<appeared+160||milliseconds>=deadline?16:Math.Max(16,(int)Math.Ceiling(deadline-milliseconds));}
-        public void Update(double milliseconds,bool visible,int percent){
-            double alpha=visible?Opacity(milliseconds):0;
+        public void Update(double milliseconds,bool visible,int percent,int lifetime=2400){
+            double alpha=visible?Opacity(milliseconds):1;
             double before=visible?Percent(milliseconds):percent;
-            appeared=milliseconds;deadline=milliseconds+2400;fromOpacity=alpha;
+            appeared=milliseconds;deadline=milliseconds+lifetime;fromOpacity=alpha;
             fromPercent=before<0?percent:before;targetPercent=percent;
         }
     }

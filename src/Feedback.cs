@@ -15,6 +15,7 @@ namespace GTBook {
         public int Percent=-1,Mode=-1;
         public Color[] Zones;
         public bool IsPending;
+        public string ControlLabel{get{return Kind==FeedbackKind.Brightness?"Screen brightness":Kind==FeedbackKind.KeyboardBrightness?"Keyboard brightness":"";}}
         public static FeedbackNotice Pending(Request request){
             if(request.Action=="mode")return new FeedbackNotice{Kind=FeedbackKind.Mode,Title=PerformanceModes.Names[request.Mode]+" mode",Detail="",Mode=-1,IsPending=true};
             if(request.Action=="screen-brightness")return new FeedbackNotice{Kind=FeedbackKind.Brightness,Title="Screen brightness",Detail="",IsPending=true};
@@ -60,7 +61,7 @@ namespace GTBook {
         public void Dispose(){foreach(var player in players){player.Stop();player.Dispose();}foreach(var stream in streams)stream.Dispose();}
     }
     public sealed class ShortcutToast : Form {
-        public const float VisualScale=.8303f;
+        public const float VisualScale=.66424f;
         readonly System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer();readonly Stopwatch elapsed=Stopwatch.StartNew();
         readonly PopupMotion motion=new PopupMotion();readonly bool renderOnly;
         FeedbackNotice notice=new FeedbackNotice();
@@ -69,7 +70,7 @@ namespace GTBook {
         protected override CreateParams CreateParams{get{var p=base.CreateParams;p.ExStyle|=0x08000000|0x80;return p;}}
         public ShortcutToast(bool renderOnly=false){
             this.renderOnly=renderOnly;
-            FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;ShowInTaskbar=false;TopMost=true;DoubleBuffered=true;AutoScaleMode=AutoScaleMode.Dpi;ClientSize=new Size(399,136);BackColor=Theme.Ivory;
+            FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;ShowInTaskbar=false;TopMost=true;DoubleBuffered=true;AutoScaleMode=AutoScaleMode.Dpi;ClientSize=new Size(319,109);BackColor=Theme.Ivory;
             UpdateShape();
             timer.Interval=16;timer.Tick+=(s,e)=>{double ms=elapsed.Elapsed.TotalMilliseconds;if(motion.Expired(ms)){Hide();timer.Stop();return;}double alpha=Math.Max(.01,motion.Opacity(ms));if(Math.Abs(Opacity-alpha)>.001)Opacity=alpha;Invalidate();timer.Interval=motion.NextTick(ms);};
         }
@@ -103,6 +104,10 @@ namespace GTBook {
             bool screen=notice.Kind==FeedbackKind.Brightness;
             if(keyboard||screen){
                 var title=PopupLayout.KeyboardTitle(ClientSize,s);
+                if(notice.ControlLabel.Length>0){
+                    TextAt(g,notice.ControlLabel,12,FontStyle.Bold,new RectangleF(91*s,14*s,Width-113*s,24*s),Theme.OrangeInk);
+                    title=new RectangleF(91*s,40*s,Width-113*s,46*s);
+                }
                 string primary=screen?(notice.Percent<0?"…":notice.Percent+"%"):notice.Title;
                 TextAt(g,primary,FittedTitleSize(g,primary,title),FontStyle.Bold,title,Theme.Ink,TextFormatFlags.SingleLine|TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter);
             }else{

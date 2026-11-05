@@ -1,6 +1,12 @@
 # Release validation
 
-Candidate: 2.0.0-rc.13. Hardware profile: INFINIX GL613 / BIOS 1.00.
+Candidate: 2.0.0-rc.14. Hardware profile: INFINIX GL613 / BIOS 1.00.
+
+## RC14 labelled compact brightness notices
+
+- Restored explicit Screen brightness / Keyboard brightness labels above the main percentage/Off value, without quotes or level descriptions. Effect notices retain only their effect name.
+- Reduced RC13 dimensions by approximately 20% to 319 x 109 logical pixels. Text, icons and graphics share a consistent 0.66424 scale.
+- 95 local checks pass. Screen and keyboard notification renders were reviewed for label visibility and readable percentages. The brightness-meter continuity behavior is unchanged.
 
 ## RC13 primary-only notifications
 
@@ -68,7 +74,7 @@ Candidate: 2.0.0-rc.13. Hardware profile: INFINIX GL613 / BIOS 1.00.
 - EC lighting gates are written only when their state changes. Timeout-disable packets no longer carry RGB/brightness payload and are not reissued on each shortcut in the same active app session. Initial static-zone setup remains once when entering a fresh Extra connection, as required by the reviewed controller path.
 - Wide/full-screen Lighting places keyboard and rear controls beside each other. The 1920-pixel wide layout and compact fallback passed geometry checks and DPI-aware visual rendering. Group headers open their effect list and use large chevrons; Four zones marks its extra zone settings.
 - USB settings have dedicated ON/OFF controls and highlights based only on confirmed firmware values. The exact OEM EC/SMI write path is followed by bounded repeated firmware read-back. Optional installer -VerifyUsb checks both states and restores the original setting.
-- RC5 installed successfully (2.0.0.12), with the installed EXE hash matching the packaged EXE. The user reported that the new layout/effect picker and F3 brightness/effect transitions are now good.
+- RC5 installed successfully (2.0.0.13), with the installed EXE hash matching the packaged EXE. The user reported that the new layout/effect picker and F3 brightness/effect transitions are now good.
 - On-device USB verification confirmed OFF and ON through the OEM firmware path, then restored the original OFF setting; report ok=true and original_restored=true. Real shutdown USB power remains pending a physical phone/port test. Firmware read-back does not measure the voltage/current of a shut-down USB port.
 
 ## RC4 feedback and device details
@@ -90,7 +96,7 @@ Candidate: 2.0.0-rc.13. Hardware profile: INFINIX GL613 / BIOS 1.00.
 - Extra animation active, two app processes: 66.91 MiB total private bytes and 96.95 MiB summed working sets; 1015.625 ms CPU over 30.27 seconds (3.356% of one logical core). UI was visible; this is not a native-effects tray-idle or battery-life measurement, and summed working sets can include shared pages.
 - RC2 corrects an observed transient hardware-lock collision during Extra animation and changes button background compositing. 64 desktop software checks pass; release-tooling checks cover parse/new-install/upgrade atomic writes and cleanup. RC2 still needs application and live visual verification.
 - RC3 additionally clears every custom-button paint surface, uses an opaque bevel shadow, keeps orange selected fills during temporary disable, closes the verified OEM UI at administrator startup/open, and refreshes visible readings at 5s AC / 10s battery without stopping music. 69 desktop software checks and 68 headless checks pass. New tests exercise paint-only repaint, persistent orange fill, strict OEM identity matching, graceful/fallback shutdown ordering and polling policy.
-- RC3 (file version 2.0.0.12) was installed and inspected live on 4 November 2026: black button leftovers were absent, Overview and Gaming remained orange-selected, and readings changed without a Refresh click (CPU 45→48°C, GPU 40→41°C, GPU fan 2000→1900 RPM). The user confirmed that opening Essentials automatically closed official Control Center.
+- RC3 (file version 2.0.0.13) was installed and inspected live on 4 November 2026: black button leftovers were absent, Overview and Gaming remained orange-selected, and readings changed without a Refresh click (CPU 45→48°C, GPU 40→41°C, GPU fan 2000→1900 RPM). The user confirmed that opening Essentials automatically closed official Control Center.
 
 ## Release gates
 

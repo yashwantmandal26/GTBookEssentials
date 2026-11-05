@@ -491,7 +491,7 @@ namespace GTBook {
                 var motion=new PopupMotion();motion.Update(0,false,-1,10000);Check(motion.Opacity(0)==1&&!motion.Expired(9000),"pending feedback must be immediately readable and remain visible");
             });
             test("Compact notification dimensions use the requested cumulative scale",()=>{
-                using(var toast=new ShortcutToast(true))Check(toast.ClientSize.Width==399&&toast.ClientSize.Height==136&&Math.Abs(ShortcutToast.VisualScale-.8303)<.001,"wrong compact popup size");
+                using(var toast=new ShortcutToast(true))Check(toast.ClientSize.Width==319&&toast.ClientSize.Height==109&&Math.Abs(ShortcutToast.VisualScale-.66424)<.001,"wrong compact popup size");
             });
             test("Confirmed performance writes do not wait before their first read-back",()=>{
                 int delays=0;using(var oem=new OemProtocol((method,b)=>b[15]==160&&b[13]==0?2u:0u)){
@@ -517,6 +517,11 @@ namespace GTBook {
                     Check(FeedbackNotice.Applied(request,reply).Detail.Length==0&&FeedbackNotice.Pending(request).Detail.Length==0,"unnecessary secondary copy remains");
                 }
                 Check(FeedbackNotice.Applied(new Request(),Reply.Fail("Device disconnected")).Detail=="Device disconnected","actionable error was hidden");
+            });
+            test("Brightness notifications identify screen versus keyboard without adding quotes",()=>{
+                Check(new FeedbackNotice{Kind=FeedbackKind.Brightness}.ControlLabel=="Screen brightness","screen label missing");
+                Check(new FeedbackNotice{Kind=FeedbackKind.KeyboardBrightness}.ControlLabel=="Keyboard brightness","keyboard label missing");
+                Check(new FeedbackNotice{Kind=FeedbackKind.Keyboard}.ControlLabel=="","effect should retain only its primary name");
             });
             test("Routine controls apply directly while GPU and startup retain confirmation",()=>{
                 foreach(string action in new[]{"mode","auto","fan","keyboard","keyboard-animation","rear","rear-off","rear-music","usb","windows-key","software-fn"})Check(!ConfirmationPolicy.Required(action),"unexpected confirmation: "+action);

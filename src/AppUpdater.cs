@@ -259,6 +259,32 @@ namespace GTBook {
             }
         }
 
+        static void CleanupOldUpdates(string updatesDir) {
+            try {
+                foreach (string file in Directory.GetFiles(updatesDir)) {
+                    try { File.Delete(file); } catch {}
+                }
+                foreach (string dir in Directory.GetDirectories(updatesDir, "extract-*")) {
+                    try { Directory.Delete(dir, true); } catch {}
+                }
+            } catch {}
+        }
+
+        internal static string ResolveExpectedSha256(string inlineSha256, string sha256AssetUrl, Func<string, string> fetchText) {
+            if (!string.IsNullOrEmpty(inlineSha256)) return inlineSha256;
+            if (string.IsNullOrEmpty(sha256AssetUrl)) return null;
+            string digest;
+            try {
+                digest = ExtractSha256Hex(fetchText(sha256AssetUrl));
+            } catch (Exception ex) {
+                throw new IOException("Could not verify release checksum file: " + ex.Message, ex);
+            }
+            if (string.IsNullOrEmpty(digest)) {
+                throw new IOException("Release checksum file did not contain a valid SHA-256 digest.");
+            }
+            return digest;
+        }
+
         public static Task DownloadAndLaunchAsync(UpdateCheckResult info, Action<int> onProgress, CancellationToken token) {
             return Task.Run(() => {
                 if (info == null || string.IsNullOrEmpty(info.DownloadUrl) || !IsTrustedDownloadUrl(info.DownloadUrl)) {
@@ -266,6 +292,7 @@ namespace GTBook {
                 }
                 string updatesDir = Path.Combine(Store.DirectoryPath, "updates");
                 Directory.CreateDirectory(updatesDir);
+                CleanupOldUpdates(updatesDir);
                 string safeName = Path.GetFileName(info.AssetName);
                 if (string.IsNullOrWhiteSpace(safeName)) safeName = "GTBOOK-Essentials-Setup.exe";
                 foreach (char bad in Path.GetInvalidFileNameChars()) safeName = safeName.Replace(bad, '_');
@@ -296,10 +323,7 @@ namespace GTBook {
                         }
                     }
 
-                    string expectedHash = info.ExpectedSha256;
-                    if (string.IsNullOrEmpty(expectedHash) && !string.IsNullOrEmpty(info.Sha256AssetUrl)) {
-                        try { expectedHash = ExtractSha256Hex(FetchText(info.Sha256AssetUrl)); } catch {}
-                    }
+                    string expectedHash = ResolveExpectedSha256(info.ExpectedSha256, info.Sha256AssetUrl, FetchText);
                     if (!string.IsNullOrEmpty(expectedHash)) {
                         string actualHash = ComputeSha256(tempFile);
                         if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase)) {

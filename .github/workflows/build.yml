@@ -22,7 +22,13 @@ jobs:
         run: |
           $tag = $env:GITHUB_REF_NAME
           $ver = ($tag -replace '^[vV]', '') -replace '[-+].*$', ''
-          $parts = @($ver.Split('.') | ForEach-Object { [int]$_ })
+          $rawParts = $ver.Split('.')
+          $parts = @()
+          foreach ($seg in $rawParts) {
+            $n = 0
+            if (-not [int]::TryParse($seg, [ref]$n) -or $n -lt 0) { throw "Invalid numeric release tag segment '$seg' in tag '$tag'." }
+            $parts += $n
+          }
           while ($parts.Count -lt 4) { $parts += 0 }
           $asmVer = ($parts[0..3] -join '.')
           (Get-Content .\Build-Release.ps1 -Raw) -replace "\`$version\s*=\s*'[^']*'", "`$version='$ver'" | Set-Content .\Build-Release.ps1 -NoNewline
@@ -33,7 +39,16 @@ jobs:
           $id | Set-Content .\src\AppIdentity.cs -NoNewline
       - name: Test and package
         shell: powershell
+        env:
+          GTBOOK_HEADLESS_TESTS: '1'
         run: .\Build-Release.ps1
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-log
+          path: tests/results.txt
+          if-no-files-found: ignore
       - name: Check one-file setup without installing
         shell: powershell
         run: |

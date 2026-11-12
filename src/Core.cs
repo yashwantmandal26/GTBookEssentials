@@ -181,13 +181,9 @@ namespace GTBook {
             var native=devices.Oem;{
             object oem=native;
             if (r.Action == "mode") {
-                var confirmed=PerformanceModes.Apply(native,r.Mode,Thread.Sleep);
-                answer.Message=confirmed.Message;answer.Data["mode"]=confirmed.Data["mode"];
-                if(r.Mode==3){
-                    try{native.SetFanFullMode(true);answer.Data["cooling"]="Full fan override";}catch{}
-                }else if(r.RestoreAutoCooling){
-                    try{native.SetFanFullMode(false);answer.Data["cooling"]="Firmware auto";}catch{}
-                }
+                var modeReply=PerformanceModes.ApplyModeWithCooling(native,r.Mode,r.RestoreAutoCooling,Thread.Sleep,Store.Log);
+                answer.Message=modeReply.Message;
+                foreach(var kv in modeReply.Data)answer.Data[kv.Key]=kv.Value;
             } else if (r.Action == "auto" || r.Action=="fan") {
                 bool enabled=r.Action=="fan" && r.Enabled;
                 Call(oem, "SetFanFullMode", enabled);bool matched=false;

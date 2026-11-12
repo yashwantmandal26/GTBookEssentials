@@ -1,5 +1,7 @@
 # Local recovery tooling and generated test executables are not release inputs.
 GTBook.exe
+Fix-Latest-Startup.ps1
+Launch-Latest.ps1
 tests/recovery/
 tests/*.exe
 tests/out/

@@ -24,7 +24,6 @@ namespace GTBook
 
 		private readonly Panel sidebar = new GradientSurface{Sidebar=true};
         private readonly Label pageEyebrow=new Label();
-        private readonly Label littleQuote=new Label();
 
 		private readonly Label status = new Label();
 
@@ -152,6 +151,10 @@ namespace GTBook
 		private readonly KeyLock keyLock = new KeyLock();
 
 		private readonly NotifyIcon tray = new NotifyIcon();
+        private Icon trayIcon;
+        private ContextMenuStrip trayMenu;
+        private PictureBox brandLogo;
+        private Bitmap brandBitmap;
 
 		private readonly Label extra = new Label();
 
@@ -326,8 +329,8 @@ namespace GTBook
 			base.Controls.Add(body);
 			base.Controls.Add(sidebar);
 			body.Dock = DockStyle.Fill;
-            var brandBitmap=AppIdentity.LoadLogo();
-            var logo=new PictureBox{Image=brandBitmap,SizeMode=PictureBoxSizeMode.Zoom,Location=new Point(S(22),S(26)),Size=new Size(S(48),S(48)),BackColor=Color.Transparent};sidebar.Controls.Add(logo);
+            brandBitmap=AppIdentity.LoadLogo();
+            brandLogo=new PictureBox{Image=brandBitmap,SizeMode=PictureBoxSizeMode.Zoom,Location=new Point(S(22),S(26)),Size=new Size(S(48),S(48)),BackColor=Color.Transparent};sidebar.Controls.Add(brandLogo);
 			Label label = Label("GTBOOK", 15f, true);
 			label.SetBounds(S(80), S(26), S(126), S(32));
 			sidebar.Controls.Add(label);
@@ -466,12 +469,19 @@ namespace GTBook
 				shortcutToast.Dispose();
                 if(modeObserver!=null)modeObserver.Dispose();
                 if(modeChime!=null)modeChime.Dispose();
-				ClearCachedPages();
+				ClearCachedPages(true);
 				clock.Stop();
 				clock.Dispose();
 				keyLock.Dispose();
+                tray.Visible=false;
+                tray.ContextMenuStrip=null;
+                tray.Icon=null;
 				tray.Dispose();
-                brandBitmap.Dispose();Icon.Dispose();
+                if(trayMenu!=null){trayMenu.Dispose();trayMenu=null;}
+                if(trayIcon!=null){trayIcon.Dispose();trayIcon=null;}
+                if(brandLogo!=null&&!brandLogo.IsDisposed)brandLogo.Image=null;
+                if(brandBitmap!=null){brandBitmap.Dispose();brandBitmap=null;}
+                Icon.Dispose();
 			};
 			base.Shown += async delegate
 			{
@@ -500,10 +510,11 @@ namespace GTBook
 					}
 				}
 			};
-			tray.Icon = AppIdentity.LoadIcon(32);
+			trayIcon = AppIdentity.LoadIcon(32);
+			tray.Icon = trayIcon;
 			tray.Text = AppIdentity.Name;
 			tray.Visible = true;
-			ContextMenuStrip contextMenuStrip = new ContextMenuStrip
+			trayMenu = new ContextMenuStrip
 			{
 				Items = 
 				{
@@ -533,7 +544,7 @@ namespace GTBook
 					}
 				}
 			};
-			tray.ContextMenuStrip = contextMenuStrip;
+			tray.ContextMenuStrip = trayMenu;
 			tray.DoubleClick += delegate
 			{
 				ShowWithDeviceControl();
@@ -918,8 +929,8 @@ namespace GTBook
             MinimumSize=Size.Empty;
             ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Location=new Point(-32000,-32000);Show();
             if((CreateParams.ExStyle&0x02000000)==0)throw new Exception("MainWindow missing WS_EX_COMPOSITED double-buffered resize protection.");
-            foreach(int width in new[]{1920,860,1280,860,1080}){
-                ClientSize=new Size(width,width==1920?1080:800);
+            foreach(int width in new[]{1920,860,1280,760,860,1080}){
+                ClientSize=new Size(width,width==1920?1080:(width==760?560:800));
                 foreach(string pageTitle in new[]{"Overview","Lighting","Settings","Device & help"}){
                     ShowPage(pageTitle);PerformLayout();page.PerformLayout();Application.DoEvents();
                     foreach(Control card in page.Controls){
@@ -1091,8 +1102,6 @@ namespace GTBook
 			}
 			label2.Text = (string)obj2;
             pageEyebrow.Text=title=="Overview"?"":title=="Device & help"?"DEVICE & SUPPORT":title.ToUpperInvariant();
-            littleQuote.Text=title=="Overview"?"Small steps.\nSteady progress.":title=="Lighting"?"A little colour.\nA little joy.":title=="Settings"?"Less fuss.\nMore flow.":"Good tools.\nQuiet confidence.";
-            littleQuote.Tag=littleQuote.Text;
 			Control[] value;
 			if (cachedPages.TryGetValue(title, out value))
 			{
@@ -1314,11 +1323,8 @@ namespace GTBook
 			if (action.StartsWith("mode-"))
 			{
 				int mode = int.Parse(action.Substring(5));
-				await Run(new Request
-				{
-					Action = "mode",
-					Mode = mode
-				}, null, false, true);
+				string currentMode = snapshot.ContainsKey("mode") ? snapshot["mode"] : "";
+				await Run(PerformanceModes.SwitchRequest(mode, confirmedMode, currentMode), null, false, true);
 				return;
 			}
 			if (action == "keyboard-brightness")
@@ -1331,7 +1337,7 @@ namespace GTBook
 				{
 					return;
 				}
-				string[] array = (ExtraEffects.Contains(keyboard.Effect) ? ExtraEffects.Names : new string[6] { "Static", "Breathing", "Wave", "Clock", "Rainbow", "Flow" });
+				string[] array = (ExtraEffects.Contains(keyboard.Effect) ? ExtraEffects.Names : new string[7] { "Static", "Breathing", "Wave", "Clock", "Rainbow", "Flow", "Four zones" });
 				keyboard.Effect = array[(Array.IndexOf(array, keyboard.Effect) + 1) % array.Length];
 			}
 			keyboardPending++;
@@ -1376,6 +1382,31 @@ namespace GTBook
 			}
 		}
 
+		private void DisposeControlWithFonts(Control root)
+		{
+			if (root == null || root.IsDisposed) return;
+			var customFonts = new List<Font>();
+			CollectCustomFonts(root, customFonts);
+			root.Dispose();
+			foreach (Font f in customFonts)
+			{
+				try { f.Dispose(); } catch {}
+			}
+		}
+
+		private void CollectCustomFonts(Control parent, List<Font> fonts)
+		{
+			Font baseFont = base.Font;
+			if (parent.Font != null && !object.ReferenceEquals(parent.Font, baseFont) && !fonts.Contains(parent.Font))
+			{
+				fonts.Add(parent.Font);
+			}
+			foreach (Control child in parent.Controls)
+			{
+				CollectCustomFonts(child, fonts);
+			}
+		}
+
 		private void ClearCachedPage(string title)
 		{
 			if (selectedPage == title)
@@ -1391,14 +1422,14 @@ namespace GTBook
 				foreach (Control control in array)
 				{
                     cardReflows.Remove(control);
-					control.Dispose();
+					DisposeControlWithFonts(control);
 				}
 				cachedPages.Remove(title);
 			}
 			scrollPositions.Remove(title);
 		}
 
-		private void ClearCachedPages()
+		private void ClearCachedPages(bool disposing = false)
 		{
 			Control[] array = new Control[] { modeValue, cpuValue, batteryValue, coolingValue, details, extra, modeTile, cpuTile, batteryTile, gpuTile, cpuFanTile, gpuFanTile, memoryTile, diskTile, readingsPill, coolingPill, healthSyncPill, updateStatusPill };
 			foreach (Control control in array)
@@ -1420,12 +1451,19 @@ namespace GTBook
 				foreach (Control control in array)
 				{
                     cardReflows.Remove(control);
-					control.Dispose();
+					DisposeControlWithFonts(control);
 				}
 			}
 			cachedPages.Clear();
             cardReflows.Clear();
 			scrollPositions.Clear();
+			if (disposing)
+			{
+				foreach (Control control in new Control[] { modeValue, cpuValue, batteryValue, coolingValue, details, extra, modeTile, cpuTile, batteryTile, gpuTile, cpuFanTile, gpuFanTile, memoryTile, diskTile, readingsPill, coolingPill, healthSyncPill, updateStatusPill, specView })
+				{
+					if (control != null && !control.IsDisposed) DisposeControlWithFonts(control);
+				}
+			}
 		}
 
 		private void Overview()
@@ -1504,13 +1542,8 @@ namespace GTBook
 				int mode = i;
 				Button button = Button(array3[i], async delegate
 				{
-					bool wasTurbo = confirmedMode == 3 || (snapshot.ContainsKey("mode") && snapshot["mode"] == "Turbo");
-					await Run(new Request
-					{
-						Action = "mode",
-						Mode = mode,
-						RestoreAutoCooling = wasTurbo
-					}, null);
+					string currentMode = snapshot.ContainsKey("mode") ? snapshot["mode"] : "";
+					await Run(PerformanceModes.SwitchRequest(mode, confirmedMode, currentMode), null);
 				});
 				button.Tag = array3[i];
 				button.Dock = DockStyle.Fill;
@@ -3156,7 +3189,7 @@ namespace GTBook
 					try
 					{
 						UpdateBattery();UpdateUiPolling();
-						if (!preview && confirmedMode == 3 && e.Mode == PowerModes.StatusChange) EnergySaver.Sync(3, autoEnergySaver);
+						if (!preview && confirmedMode == 3 && e.Mode == PowerModes.StatusChange) EnergySaver.SyncAsync(3, autoEnergySaver);
 						if (e.Mode == PowerModes.Suspend)
 						{
                             suspended=true;keyboardAwakeConfigured=false;
@@ -3240,7 +3273,26 @@ namespace GTBook
             var saveDiagBtn=Button("Save diagnostics", SaveDiagnostics);
             saveDiagBtn.SetBounds(originalControls.Right + S(10), 0, S(165), S(42));
 			flowLayoutPanel2.Controls.Add(saveDiagBtn);
-			flowLayoutPanel2.Width = saveDiagBtn.Right + S(4);
+			Action layoutDiagActions = () => {
+				if (flowLayoutPanel2.IsDisposed) return;
+				int maxW = Math.Max(S(180), flowLayoutPanel2.Width);
+				int gap = S(10), rowGap = S(8), btnH = S(42);
+				int x = 0, y = 0;
+				Control[] btns = { refreshBtn, originalControls, saveDiagBtn };
+				int[] widths = { S(135), S(165), S(165) };
+				for (int i = 0; i < btns.Length; i++) {
+					int bw = Math.Min(widths[i], maxW);
+					if (x > 0 && x + bw > maxW) {
+						x = 0;
+						y += btnH + rowGap;
+					}
+					btns[i].SetBounds(x, y, bw, btnH);
+					x += bw + gap;
+				}
+				flowLayoutPanel2.Height = y + btnH + S(6);
+			};
+			RegisterCardReflow(flowLayoutPanel2, layoutDiagActions);
+			layoutDiagActions();
 			page.Controls.Add(flowLayoutPanel2);
 		}
 
@@ -3553,7 +3605,8 @@ namespace GTBook
 					else if (key == "Performance")
 					{
 						bool turbo = current == "Turbo";
-						if (raisedButton.Text != (turbo ? "Turbo" : "Performance")) raisedButton.Text = turbo ? "Turbo" : "Performance";
+						string targetLabel = Languages.Translate(turbo ? "Turbo" : "Performance");
+						if (raisedButton.Text != targetLabel) raisedButton.Text = targetLabel;
 						raisedButton.Selected = turbo || current == "Performance";
 						raisedButton.Accent = turbo ? Color.FromArgb(255, 65, 20) : (raisedButton.Selected ? Color.FromArgb(244, 117, 20) : Color.Empty);
 					}
@@ -3571,7 +3624,7 @@ namespace GTBook
                 bool changed=confirmedMode!=notice.Mode;confirmedMode=notice.Mode;
                 if(modeObserver!=null)modeObserver.Confirm(notice.Mode>2?2:notice.Mode);
                 if(changed&&modeSounds&&!preview){if(modeChime==null)modeChime=new ModeChime();modeChime.Play(notice.Mode);}
-                if(!preview)EnergySaver.Sync(notice.Mode,autoEnergySaver);
+                if(!preview)EnergySaver.SyncAsync(notice.Mode,autoEnergySaver);
                 if(!changed)notice.Detail="Already active. You're all set.";
                 else if(notice.Mode==3)notice.Detail="Ultimate Performance · Full fans ON";
                 else if(autoEnergySaver&&notice.Mode==0)notice.Detail="Energy saver active · Quiet & cool";
@@ -3591,10 +3644,9 @@ namespace GTBook
             if (!preview && confirmedMode >= 0)
             {
                 if (enabled) {
-                    EnergySaver.Sync(confirmedMode, true);
+                    EnergySaver.SyncAsync(confirmedMode, true);
                 } else if (confirmedMode == 0) {
-                    EnergySaver.SetEnergySaver(false);
-                    EnergySaver.SetPowerOverlay(0);
+                    EnergySaver.DisableEnergySaverInQuietAsync();
                 }
             }
         }
@@ -3603,7 +3655,7 @@ namespace GTBook
         {
             if(preview||IsDisposed||!snapshot.ContainsKey("mode"))return;
             int mode=PerformanceModes.Index(snapshot["mode"]);if(mode<0)return;
-            if(confirmedMode<0){confirmedMode=mode;if(!preview)EnergySaver.Sync(mode,autoEnergySaver);}
+            if(confirmedMode<0){confirmedMode=mode;if(!preview)EnergySaver.SyncAsync(mode,autoEnergySaver);}
             else if(confirmedMode!=mode && !(confirmedMode==3 && mode==2)){var reply=new Reply{Ok=true};reply.Data["mode"]=PerformanceModes.Names[mode];NotifyApplied(new Request{Action="mode",Mode=mode},reply);}
             if(modeObserver!=null){modeObserver.Confirm(mode>2?2:mode);return;}
             if(!snapshot.ContainsKey("supported")||snapshot["supported"]!="True"||snapshot.ContainsKey("conflict")&&snapshot["conflict"].Length>0)return;
@@ -3661,8 +3713,6 @@ namespace GTBook
                     MarkMode(page,PerformanceModes.Names[r.Mode]);
                     modeValue.Text=PerformanceModes.Names[r.Mode];
                     UpdateModeTile(PerformanceModes.Names[r.Mode]);
-                    if(r.Mode==3){coolingValue.Text="Full fan override";snapshot["cooling"]="Full fan override";UpdateCoolingTile("Full fan override");}
-                    else if(r.RestoreAutoCooling){coolingValue.Text="Firmware auto";snapshot["cooling"]="Firmware auto";UpdateCoolingTile("Firmware auto");}
                     status.Text=PerformanceModes.Names[r.Mode]+" mode";status.ForeColor=ink;
                 }
             }

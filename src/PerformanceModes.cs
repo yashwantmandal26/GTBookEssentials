@@ -6,6 +6,10 @@ namespace GTBook {
     public static class PerformanceModes {
         public static readonly string[] Names={"Quiet","Balanced","Performance","Turbo"};
         public static int Index(string name){return Array.IndexOf(Names,name);}
+        public static Request SwitchRequest(int mode,int confirmedMode,string snapshotMode){
+            bool wasTurbo=confirmedMode==3||string.Equals(snapshotMode,"Turbo",StringComparison.Ordinal);
+            return new Request{Action="mode",Mode=mode,RestoreAutoCooling=mode!=3&&wasTurbo};
+        }
         public static Reply Apply(OemProtocol oem,int mode,Action<int> delay){
             if(mode<0||mode>3)throw new ArgumentException("Unknown performance mode.");
             int ecMode=mode==3?2:mode;
@@ -17,6 +21,34 @@ namespace GTBook {
                 return result;
             }}
             throw new IOException("Power mode read-back did not match. Current raw value: "+actual+". Refresh before retrying.");
+        }
+        internal static Reply ApplyModeWithCooling(OemProtocol oem,int mode,bool restoreAutoCooling,Action<int> delay,Action<string> log=null){
+            var confirmed=Apply(oem,mode,delay);
+            var answer=new Reply{Ok=true,Message=confirmed.Message};
+            answer.Data["mode"]=confirmed.Data["mode"];
+            if(mode==3){
+                bool fullFan=false;
+                for(int attempt=0;attempt<4;attempt++){
+                    if(attempt>0)delay(50);
+                    try{if(oem.GetFanFullMode()==1u){fullFan=true;break;}}catch(Exception fanReadEx){if(attempt==3&&log!=null)log("Turbo fan readback: "+fanReadEx.Message);}
+                }
+                answer.Data["cooling"]=fullFan?"Full fan override":"Firmware auto";
+                if(!fullFan&&log!=null)log("Turbo mode: firmware did not confirm Full fan override.");
+            }else if(restoreAutoCooling){
+                try{
+                    oem.SetFanFullMode(false);
+                    bool autoRestored=false;
+                    for(int attempt=0;attempt<4;attempt++){
+                        if(attempt>0)delay(50);
+                        if(oem.GetFanFullMode()==0u){autoRestored=true;break;}
+                    }
+                    answer.Data["cooling"]=autoRestored?"Firmware auto":"Full fan override";
+                    if(!autoRestored&&log!=null)log("Mode exit: firmware did not confirm automatic cooling restore.");
+                }catch(Exception fanEx){
+                    if(log!=null)log("Mode exit restore auto cooling: "+fanEx.Message);
+                }
+            }
+            return answer;
         }
     }
     public sealed class PerformanceHoldGesture {

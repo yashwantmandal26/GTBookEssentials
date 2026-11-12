@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 
 namespace GTBook {
@@ -39,6 +41,9 @@ namespace GTBook {
 
         [DllImport("powrprof.dll", EntryPoint = "PowerSetActiveScheme")]
         static extern uint PowerSetActiveScheme(IntPtr UserRootPowerKey, ref Guid SchemeGuid);
+
+        [DllImport("powrprof.dll", EntryPoint = "PowerGetActiveScheme")]
+        static extern uint PowerGetActiveScheme(IntPtr UserRootPowerKey, out IntPtr ActivePolicyGuid);
 
         [DllImport("powrprof.dll", EntryPoint = "PowerDuplicateScheme")]
         static extern uint PowerDuplicateScheme(IntPtr RootPowerKey, ref Guid SourceSchemeGuid, out IntPtr DestinationSchemeGuid);
@@ -177,12 +182,55 @@ namespace GTBook {
             }
         }
 
+        static readonly object syncGate = new object();
+        static Guid cachedTurboScheme = Guid.Empty;
+        static bool turboSettingsApplied;
+
+        static Guid ReadActiveScheme() {
+            IntPtr ptr = IntPtr.Zero;
+            try {
+                if (PowerGetActiveScheme(IntPtr.Zero, out ptr) == 0 && ptr != IntPtr.Zero) {
+                    return (Guid)Marshal.PtrToStructure(ptr, typeof(Guid));
+                }
+            } catch {} finally {
+                if (ptr != IntPtr.Zero) LocalFree(ptr);
+            }
+            return Guid.Empty;
+        }
+
+        static void SavePreTurboScheme(Guid turbo) {
+            try {
+                Guid current = ReadActiveScheme();
+                if (current == Guid.Empty || (turbo != Guid.Empty && current == turbo)) return;
+                if (ReadFriendlyName(current) == TurboSchemeFriendlyName) return;
+                Directory.CreateDirectory(Store.DirectoryPath);
+                File.WriteAllText(Path.Combine(Store.DirectoryPath, "pre-turbo-scheme.txt"), current.ToString("D"));
+            } catch {}
+        }
+
+        static Guid ResolveNonTurboScheme(Guid turbo) {
+            try {
+                string path = Path.Combine(Store.DirectoryPath, "pre-turbo-scheme.txt");
+                if (File.Exists(path)) {
+                    Guid saved;
+                    if (Guid.TryParse(File.ReadAllText(path).Trim(), out saved) && saved != Guid.Empty && saved != turbo && ReadFriendlyName(saved) != null) {
+                        return saved;
+                    }
+                }
+            } catch {}
+            return BalancedScheme;
+        }
+
         static Guid FindExistingTurboScheme() {
+            if (cachedTurboScheme != Guid.Empty && ReadFriendlyName(cachedTurboScheme) != null) return cachedTurboScheme;
             try {
                 string savedPath = Path.Combine(Store.DirectoryPath, "turbo-scheme.txt");
                 if (File.Exists(savedPath)) {
                     Guid saved;
-                    if (Guid.TryParse(File.ReadAllText(savedPath).Trim(), out saved) && ReadFriendlyName(saved) != null) return saved;
+                    if (Guid.TryParse(File.ReadAllText(savedPath).Trim(), out saved) && ReadFriendlyName(saved) != null) {
+                        cachedTurboScheme = saved;
+                        return saved;
+                    }
                 }
             } catch {}
             IntPtr buf = Marshal.AllocHGlobal(16);
@@ -192,7 +240,10 @@ namespace GTBook {
                     uint res = PowerEnumerate(IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 16, idx, buf, ref size);
                     if (res != 0) break;
                     Guid candidate = (Guid)Marshal.PtrToStructure(buf, typeof(Guid));
-                    if (ReadFriendlyName(candidate) == TurboSchemeFriendlyName) return candidate;
+                    if (ReadFriendlyName(candidate) == TurboSchemeFriendlyName) {
+                        cachedTurboScheme = candidate;
+                        return candidate;
+                    }
                 }
             } catch {} finally {
                 Marshal.FreeHGlobal(buf);
@@ -217,6 +268,8 @@ namespace GTBook {
                     }
                 }
                 if (turbo != Guid.Empty) {
+                    cachedTurboScheme = turbo;
+                    turboSettingsApplied = false;
                     try {
                         byte[] nameBytes = Encoding.Unicode.GetBytes(TurboSchemeFriendlyName + "\0");
                         PowerWriteFriendlyName(IntPtr.Zero, ref turbo, IntPtr.Zero, IntPtr.Zero, nameBytes, (uint)nameBytes.Length);
@@ -225,7 +278,7 @@ namespace GTBook {
                     } catch {}
                 }
             }
-            if (turbo != Guid.Empty) {
+            if (turbo != Guid.Empty && !turboSettingsApplied) {
                 for (int i = 0; i < TurboSettings.Length; i++) {
                     var item = TurboSettings[i];
                     Guid sub = item.SubGroup;
@@ -233,46 +286,63 @@ namespace GTBook {
                     PowerWriteACValueIndex(IntPtr.Zero, ref turbo, ref sub, ref set, item.AcValue);
                     PowerWriteDCValueIndex(IntPtr.Zero, ref turbo, ref sub, ref set, item.DcValue);
                 }
+                turboSettingsApplied = true;
             }
             return turbo;
         }
 
         public static void Sync(int mode, bool enabled) {
-            if (mode == 0) {
-                try { var b = BalancedScheme; PowerSetActiveScheme(IntPtr.Zero, ref b); } catch {}
-                SetPowerOverlay(0);
-                if (enabled) {
-                    SetEnergySaver(true);
-                    Store.Log("Energy saver turned ON with Quiet mode (Best power efficiency).");
-                }
-            } else if (mode == 1 || mode == 2) {
-                SetEnergySaver(false);
-                try { var b = BalancedScheme; PowerSetActiveScheme(IntPtr.Zero, ref b); } catch {}
-                SetPowerOverlay(mode);
-                Store.Log("Energy saver turned OFF for " + (mode == 1 ? "Balanced" : "Performance") + " mode.");
-            } else if (mode == 3) {
-                SetEnergySaver(false);
-                bool activatedTurbo = false;
-                try {
-                    Guid turbo = EnsureTurboScheme();
-                    if (turbo != Guid.Empty) {
-                        activatedTurbo = PowerSetActiveScheme(IntPtr.Zero, ref turbo) == 0;
+            lock (syncGate) {
+                if (mode == 0) {
+                    try { var restore = ResolveNonTurboScheme(cachedTurboScheme); PowerSetActiveScheme(IntPtr.Zero, ref restore); } catch {}
+                    SetPowerOverlay(0);
+                    if (enabled) {
+                        SetEnergySaver(true);
+                        Store.Log("Energy saver turned ON with Quiet mode (Best power efficiency).");
                     }
-                    if (!activatedTurbo) {
-                        Guid high = UltimatePerformanceScheme;
-                        if (PowerSetActiveScheme(IntPtr.Zero, ref high) != 0) {
-                            high = HighPerformanceScheme;
-                            activatedTurbo = PowerSetActiveScheme(IntPtr.Zero, ref high) == 0;
-                        } else {
-                            activatedTurbo = true;
+                } else if (mode == 1 || mode == 2) {
+                    SetEnergySaver(false);
+                    try { var restore = ResolveNonTurboScheme(cachedTurboScheme); PowerSetActiveScheme(IntPtr.Zero, ref restore); } catch {}
+                    SetPowerOverlay(mode);
+                    Store.Log("Energy saver turned OFF for " + (mode == 1 ? "Balanced" : "Performance") + " mode.");
+                } else if (mode == 3) {
+                    SetEnergySaver(false);
+                    bool activatedTurbo = false;
+                    try {
+                        Guid turbo = EnsureTurboScheme();
+                        SavePreTurboScheme(turbo);
+                        if (turbo != Guid.Empty) {
+                            activatedTurbo = PowerSetActiveScheme(IntPtr.Zero, ref turbo) == 0;
                         }
+                        if (!activatedTurbo) {
+                            Guid high = UltimatePerformanceScheme;
+                            if (PowerSetActiveScheme(IntPtr.Zero, ref high) != 0) {
+                                high = HighPerformanceScheme;
+                                activatedTurbo = PowerSetActiveScheme(IntPtr.Zero, ref high) == 0;
+                            } else {
+                                activatedTurbo = true;
+                            }
+                        }
+                    } catch (Exception ex) {
+                        Store.Log("Turbo power scheme: " + ex.Message);
                     }
-                } catch (Exception ex) {
-                    Store.Log("Turbo power scheme: " + ex.Message);
+                    SetPowerOverlay(3);
+                    Store.Log("Turbo mode: " + TurboSchemeFriendlyName + " active (zero battery saving, max CPU/PCIe power" + (activatedTurbo ? ", custom Ultimate scheme" : ", overlay fallback") + ").");
                 }
-                SetPowerOverlay(3);
-                Store.Log("Turbo mode: " + TurboSchemeFriendlyName + " active (zero battery saving, max CPU/PCIe power" + (activatedTurbo ? ", custom Ultimate scheme" : ", overlay fallback") + ").");
             }
+        }
+
+        public static void SyncAsync(int mode, bool enabled) {
+            Task.Run(() => Sync(mode, enabled));
+        }
+
+        public static void DisableEnergySaverInQuietAsync() {
+            Task.Run(() => {
+                lock (syncGate) {
+                    SetEnergySaver(false);
+                    SetPowerOverlay(0);
+                }
+            });
         }
     }
 }

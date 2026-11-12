@@ -829,6 +829,65 @@ namespace GTBook {
                 Check(!AppUpdater.ParseReleaseJson(draftJson,new Version(2,1,0,0)).UpdateAvailable,"draft release must be ignored");
                 using(var form=new MainWindow(true))form.VerifyUpdateBadgeUi();
             });
+            test("PerformanceModes.SwitchRequest restores auto cooling when leaving Turbo and preserves it on non-Turbo switches",()=>{
+                var exitToBal=PerformanceModes.SwitchRequest(1,3,"Balanced");
+                Check(exitToBal.Action=="mode"&&exitToBal.Mode==1&&exitToBal.RestoreAutoCooling,"leaving confirmedMode=3 must restore auto cooling");
+                var exitSnap=PerformanceModes.SwitchRequest(0,2,"Turbo");
+                Check(exitSnap.Mode==0&&exitSnap.RestoreAutoCooling,"leaving snapshot=Turbo must restore auto cooling");
+                var stayTurbo=PerformanceModes.SwitchRequest(3,3,"Turbo");
+                Check(stayTurbo.Mode==3&&!stayTurbo.RestoreAutoCooling,"entering/staying in Turbo must not set RestoreAutoCooling");
+                var normalSwitch=PerformanceModes.SwitchRequest(2,1,"Balanced");
+                Check(normalSwitch.Mode==2&&!normalSwitch.RestoreAutoCooling,"normal switch must not set RestoreAutoCooling");
+            });
+            test("ApplyModeWithCooling writes Turbo fan override once, confirms read-back, and restores auto fans on exit",()=>{
+                int lastAddr=0,ecMode=1,fanFull=0,fanWrites=0;
+                using(var oem=new OemProtocol((method,b)=>{
+                    if(b[15]==145&&b[13]==1)lastAddr=b[16];
+                    if(b[15]==160&&b[13]==1){
+                        if(lastAddr==0x40)ecMode=b[16];
+                        if(lastAddr==0x41){fanWrites++;fanFull=b[16];}
+                    }
+                    if(b[15]==160&&b[13]==0){
+                        if(lastAddr==0x40)return (uint)ecMode;
+                        if(lastAddr==0x41)return (uint)fanFull;
+                    }
+                    return 0;
+                })){
+                    var turbo=PerformanceModes.ApplyModeWithCooling(oem,3,false,ms=>{});
+                    Check(turbo.Ok&&turbo.Data["mode"]=="Turbo"&&turbo.Data["cooling"]=="Full fan override","Turbo cooling read-back failed");
+                    Check(fanWrites==1&&fanFull==1,"Turbo must write SetFanFullMode(true) once");
+                    var exit=PerformanceModes.ApplyModeWithCooling(oem,1,true,ms=>{});
+                    Check(exit.Ok&&exit.Data["mode"]=="Balanced"&&exit.Data["cooling"]=="Firmware auto","Turbo exit auto-cooling restore failed");
+                    Check(fanWrites==2&&fanFull==0,"Turbo exit must write SetFanFullMode(false)");
+                }
+            });
+            test("Updater SHA-256 verification fails closed when checksum download fails or digest is invalid",()=>{
+                bool threwFetch=false,threwInvalid=false;
+                try{AppUpdater.ResolveExpectedSha256("","https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.2/GTBOOK-Essentials-Setup.exe.sha256",u=>{throw new TimeoutException("network timeout");});}
+                catch(IOException){threwFetch=true;}
+                Check(threwFetch,"checksum download error must fail closed");
+                try{AppUpdater.ResolveExpectedSha256("","https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.2/GTBOOK-Essentials-Setup.exe.sha256",u=>"not a valid sha256 file");}
+                catch(IOException){threwInvalid=true;}
+                Check(threwInvalid,"invalid checksum file contents must fail closed");
+                string digest="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+                Check(AppUpdater.ResolveExpectedSha256("","https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.2/a.sha256",u=>digest.ToUpperInvariant()+"  setup.exe")==digest,"valid remote sha256 did not resolve");
+            });
+            test("Languages.Translate supports Performance/Turbo aliases cleanly without mutating user settings",()=>{
+                Check(Languages.Translate("Performance","en-us")=="Performance","en-us should preserve Performance");
+                Check(Languages.Translate("Turbo","en-us")=="Turbo","en-us should preserve Turbo");
+                Check(Languages.Translate("Performance","fr")=="Mode Jeu","French Performance alias mismatch");
+                Check(Languages.Translate("Restore auto cooling","hi")!= "Restore auto cooling","Hindi Restore auto cooling alias mismatch");
+                Check(Languages.Translate("","fr")=="","empty string must stay empty");
+            });
+            test("MainWindow navigation and FormClosed dispose cached pages, tray resources, and fonts cleanly",()=>{
+                var form=new MainWindow(true);
+                form.ShowInTaskbar=false;form.StartPosition=System.Windows.Forms.FormStartPosition.Manual;form.Location=new System.Drawing.Point(-32000,-32000);
+                form.Show();
+                form.VerifyAllPagesNoTextClipping();
+                form.ExitApplication();
+                System.Windows.Forms.Application.DoEvents();
+                Check(form.IsDisposed,"MainWindow did not dispose cleanly after closing cached pages");
+            });
             output.AppendLine(passed+" passed, "+failed+" failed. Hardware was not changed.");
             File.WriteAllText(report,output.ToString()); return failed==0?0:1;
         }

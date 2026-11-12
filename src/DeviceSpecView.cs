@@ -21,17 +21,33 @@ namespace GTBook {
         static readonly string[] Categories = { "Battery", "All", "System", "CPU & RAM", "Graphics", "Storage" };
         int selectedCategory = 0; // Battery first by default
         int hoveredCategory = -1;
+        int currentPage = 0;
+        int totalPages = 1;
+        int hoveredPager = 0; // -1 prev, 1 next
+        RectangleF prevPageBounds = RectangleF.Empty;
+        RectangleF nextPageBounds = RectangleF.Empty;
         readonly List<SpecItem> items = new List<SpecItem>();
         string footerTimestamp = "";
         string lastMeasuredTime = "";
 
         public Action OnHeightChanged;
         public Action OnRefreshBattery;
+        public int MaxHeight { get; set; }
         bool isRefreshingBattery = false;
         bool hoveredRefreshBtn = false;
         RectangleF refreshBtnBounds = RectangleF.Empty;
 
         int lastLayoutWidth = -1;
+        int lastMaxHeight = 0;
+
+        sealed class SpecRow {
+            public string SectionHeader;
+            public SpecItem Left;
+            public SpecItem Right;
+            public bool LeftIsBatteryHealth;
+            public bool RightIsBatteryHealth;
+            public int Height;
+        }
 
         public DeviceSpecView() {
             DoubleBuffered = true;
@@ -45,9 +61,20 @@ namespace GTBook {
 
         protected override void OnSizeChanged(EventArgs e) {
             base.OnSizeChanged(e);
-            if (Width > 0 && Width != lastLayoutWidth) {
+            if (Width > 0 && (Width != lastLayoutWidth || MaxHeight != lastMaxHeight)) {
                 lastLayoutWidth = Width;
+                lastMaxHeight = MaxHeight;
                 RecalculateLayout();
+            }
+        }
+
+        internal void SelectCategory(int index) {
+            if (index < 0 || index >= Categories.Length) return;
+            if (selectedCategory != index) {
+                selectedCategory = index;
+                currentPage = 0;
+                RecalculateLayout();
+                Invalidate();
             }
         }
 
@@ -60,6 +87,7 @@ namespace GTBook {
             items.Clear();
             footerTimestamp = "";
             isRefreshingBattery = false;
+            currentPage = 0;
             if (string.IsNullOrWhiteSpace(report)) {
                 items.Add(new SpecItem { Category = "Battery", Section = "BATTERY HEALTH & CAPACITY", Title = "Querying live battery readings…", Subtitle = "Reading battery firmware and ACPI capacity." });
                 RecalculateLayout();
@@ -266,11 +294,9 @@ namespace GTBook {
 
         List<SpecItem> GetFilteredItems() {
             if (selectedCategory == 0) {
-                // "Battery" first
                 return items.Where(it => it.Category == "Battery").ToList();
             }
             if (selectedCategory == 1) {
-                // "All" - Battery first at top, then other categories
                 return items.Where(it => it.Category == "Battery")
                             .Concat(items.Where(it => it.Category != "Battery"))
                             .ToList();
@@ -279,71 +305,194 @@ namespace GTBook {
             return items.Where(it => it.Category == filter).ToList();
         }
 
-        RectangleF[] LayoutChips(out int divY) {
+        RectangleF[] LayoutChips(bool showPager, out int divY, out RectangleF prevRect, out RectangleF nextRect) {
             float s = DeviceDpi / 96f;
             int chipY = (int)(6 * s);
-            int chipH = (int)(28 * s);
+            int chipH = (int)(26 * s);
             int startX = (int)(4 * s);
             int maxRight = Math.Max((int)(120 * s), Width - (int)(4 * s));
             var rects = new RectangleF[Categories.Length];
             using (var chipFont = new Font(Font.FontFamily, 9f, FontStyle.Bold)) {
                 for (int i = 0; i < Categories.Length; i++) {
                     int textW = TextRenderer.MeasureText(Categories[i], chipFont, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding).Width;
-                    int w = textW + (int)(24 * s);
+                    int w = textW + (int)(22 * s);
                     if (startX > (int)(4 * s) && startX + w > maxRight) {
                         startX = (int)(4 * s);
                         chipY += chipH + (int)(6 * s);
                     }
                     rects[i] = new RectangleF(startX, chipY, w, chipH);
-                    startX += w + (int)(8 * s);
+                    startX += w + (int)(6 * s);
                 }
+            }
+            prevRect = RectangleF.Empty;
+            nextRect = RectangleF.Empty;
+            if (showPager) {
+                float btnW = 28 * s;
+                float labelW = 36 * s;
+                float pagerTotal = btnW * 2 + labelW + 8 * s;
+                if (startX + pagerTotal > maxRight) {
+                    startX = (int)(4 * s);
+                    chipY += chipH + (int)(6 * s);
+                }
+                float rightEdge = maxRight;
+                nextRect = new RectangleF(rightEdge - btnW, chipY, btnW, chipH);
+                prevRect = new RectangleF(nextRect.Left - labelW - btnW - 4 * s, chipY, btnW, chipH);
             }
             divY = chipY + chipH + (int)(6 * s);
             return rects;
         }
 
-        void MeasureItemHeights(SpecItem item, int textW, float s, out int titleH, out int subH, out int barOffset, out int tileH, bool isBatteryHealth) {
-            using (var tf = new Font("Segoe UI", 10.5f, FontStyle.Bold)) {
-                int measured = TextRenderer.MeasureText(item.Title ?? "", tf, new Size(Math.Max(40, textW), int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix).Height;
-                titleH = Math.Max((int)(22 * s), measured + (int)(2 * s));
+        void MeasureItemHeights(SpecItem item, int tileW, float s, out int titleH, out int subH, out int barOffset, out int tileH, bool isBatteryHealth) {
+            int textW = Math.Max(40, tileW - (int)(24 * s));
+            using (var tf = new Font("Segoe UI", 10f, FontStyle.Bold)) {
+                int measured = TextRenderer.MeasureText(item.Title ?? "", tf, new Size(textW, int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix).Height;
+                titleH = Math.Max((int)(20 * s), measured + (int)(2 * s));
             }
             subH = 0;
             if (!string.IsNullOrEmpty(item.Subtitle)) {
-                using (var sf = new Font("Segoe UI", 9f)) {
-                    int measured = TextRenderer.MeasureText(item.Subtitle, sf, new Size(Math.Max(40, textW), int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix).Height;
-                    subH = Math.Max((int)(18 * s), measured + (int)(2 * s));
+                using (var sf = new Font("Segoe UI", 8.5f)) {
+                    int measured = TextRenderer.MeasureText(item.Subtitle, sf, new Size(textW, int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix).Height;
+                    subH = Math.Max((int)(16 * s), measured + (int)(2 * s));
                 }
             }
-            barOffset = (int)(8 * s) + titleH + (subH > 0 ? subH + (int)(2 * s) : 0);
-            tileH = barOffset + (item.BarPercent.HasValue ? (int)(18 * s) : 0) + (isBatteryHealth ? (int)(40 * s) : 0) + (int)(8 * s);
+            barOffset = (int)(7 * s) + titleH + (subH > 0 ? subH + (int)(2 * s) : 0);
+            bool stackRefresh = isBatteryHealth && tileW < (int)(360 * s);
+            int batteryExtra = isBatteryHealth ? (stackRefresh ? (int)(56 * s) : (int)(36 * s)) : 0;
+            tileH = barOffset + (item.BarPercent.HasValue ? (int)(15 * s) : 0) + batteryExtra + (int)(7 * s);
+        }
+
+        List<SpecRow> BuildRows(float s, out int colW, out int colGap, out bool twoCol) {
+            var visible = GetFilteredItems();
+            int itemW = Math.Max((int)(120 * s), Width - (int)(8 * s));
+            twoCol = (Width >= (int)(480 * s)) && (visible.Count >= 4 || selectedCategory == 1);
+            colGap = twoCol ? (int)(8 * s) : 0;
+            colW = twoCol ? Math.Max((int)(140 * s), (itemW - colGap) / 2) : itemW;
+
+            var rows = new List<SpecRow>();
+            if (visible.Count == 0) return rows;
+
+            var lastBat = visible.LastOrDefault(v => v.Category == "Battery");
+            int idx = 0;
+            while (idx < visible.Count) {
+                string sec = visible[idx].Section;
+                var secItems = new List<SpecItem>();
+                while (idx < visible.Count && visible[idx].Section == sec) {
+                    secItems.Add(visible[idx]);
+                    idx++;
+                }
+
+                if (!twoCol) {
+                    for (int j = 0; j < secItems.Count; j++) {
+                        var item = secItems[j];
+                        bool isBat = item.Section.Contains("BATTERY HEALTH") || (selectedCategory == 0 && item == lastBat);
+                        int tH, sH, bOff, tileH;
+                        MeasureItemHeights(item, colW, s, out tH, out sH, out bOff, out tileH, isBat);
+                        rows.Add(new SpecRow {
+                            SectionHeader = j == 0 ? sec : null,
+                            Left = item,
+                            LeftIsBatteryHealth = isBat,
+                            Height = tileH
+                        });
+                    }
+                } else {
+                    for (int j = 0; j < secItems.Count; j += 2) {
+                        var left = secItems[j];
+                        var right = (j + 1 < secItems.Count) ? secItems[j + 1] : null;
+                        bool lBat = left.Section.Contains("BATTERY HEALTH") || (selectedCategory == 0 && left == lastBat);
+                        bool rBat = right != null && (right.Section.Contains("BATTERY HEALTH") || (selectedCategory == 0 && right == lastBat));
+                        int tH, sH, bOff, lH, rH = 0;
+                        MeasureItemHeights(left, right == null ? itemW : colW, s, out tH, out sH, out bOff, out lH, lBat);
+                        if (right != null) {
+                            MeasureItemHeights(right, colW, s, out tH, out sH, out bOff, out rH, rBat);
+                        }
+                        rows.Add(new SpecRow {
+                            SectionHeader = j == 0 ? sec : null,
+                            Left = left,
+                            Right = right,
+                            LeftIsBatteryHealth = lBat,
+                            RightIsBatteryHealth = rBat,
+                            Height = Math.Max(lH, rH)
+                        });
+                    }
+                }
+            }
+            return rows;
+        }
+
+        List<List<SpecRow>> PaginateRows(List<SpecRow> rows, float s, out int divY, out bool needsPager) {
+            int sectionHeaderH = (int)(22 * s);
+            int rowGap = (int)(5 * s);
+            int footerH = (!string.IsNullOrEmpty(footerTimestamp) && selectedCategory != 0) ? (int)(20 * s) : (int)(8 * s);
+            RectangleF pTmp, nTmp;
+            LayoutChips(false, out divY, out pTmp, out nTmp);
+
+            if (MaxHeight <= 0 || rows.Count == 0) {
+                needsPager = false;
+                return new List<List<SpecRow>> { rows };
+            }
+
+            // First check if all rows fit on 1 page without pager.
+            int totalH = divY + (int)(8 * s) + footerH;
+            foreach (var r in rows) {
+                if (r.SectionHeader != null) totalH += sectionHeaderH;
+                totalH += r.Height + rowGap;
+            }
+            if (totalH <= MaxHeight) {
+                needsPager = false;
+                return new List<List<SpecRow>> { rows };
+            }
+
+            // Paginate with pager bar space reserved.
+            needsPager = true;
+            LayoutChips(true, out divY, out pTmp, out nTmp);
+            int maxBodyH = Math.Max((int)(90 * s), MaxHeight - divY - (int)(8 * s) - footerH);
+            var pages = new List<List<SpecRow>>();
+            var cur = new List<SpecRow>();
+            int curH = 0;
+            foreach (var r in rows) {
+                int rh = (r.SectionHeader != null ? sectionHeaderH : 0) + r.Height + rowGap;
+                if (cur.Count > 0 && curH + rh > maxBodyH) {
+                    pages.Add(cur);
+                    cur = new List<SpecRow>();
+                    curH = 0;
+                }
+                cur.Add(r);
+                curH += rh;
+            }
+            if (cur.Count > 0) pages.Add(cur);
+            return pages;
         }
 
         public int CalculateRequiredHeight() {
             float s = DeviceDpi / 96f;
+            int colW, colGap;
+            bool twoCol;
+            var rows = BuildRows(s, out colW, out colGap, out twoCol);
             int divY;
-            LayoutChips(out divY);
-            var visible = GetFilteredItems();
-            int itemW = Math.Max((int)(120 * s), Width - (int)(8 * s));
-            int textW = Math.Max(40, itemW - (int)(28 * s));
-            int sectionHeaderH = (int)(26 * s);
+            bool needsPager;
+            var pages = PaginateRows(rows, s, out divY, out needsPager);
+            totalPages = Math.Max(1, pages.Count);
+            if (currentPage >= totalPages) currentPage = totalPages - 1;
 
-            string lastSection = "";
-            int total = divY + (int)(10 * s);
-            foreach (var item in visible) {
-                if (item.Section != lastSection) {
-                    total += sectionHeaderH;
-                    lastSection = item.Section;
+            int sectionHeaderH = (int)(22 * s);
+            int rowGap = (int)(5 * s);
+            int footerH = (!string.IsNullOrEmpty(footerTimestamp) && selectedCategory != 0) ? (int)(20 * s) : (int)(8 * s);
+            int maxPageH = 0;
+            foreach (var pg in pages) {
+                int h = divY + (int)(8 * s);
+                foreach (var r in pg) {
+                    if (r.SectionHeader != null) h += sectionHeaderH;
+                    h += r.Height + rowGap;
                 }
-                bool isBatteryHealth = item.Section.Contains("BATTERY HEALTH") || (selectedCategory == 0 && item == visible.Last());
-                int titleH, subH, barOffset, tileH;
-                MeasureItemHeights(item, textW, s, out titleH, out subH, out barOffset, out tileH, isBatteryHealth);
-                total += tileH + (int)(6 * s);
+                h += footerH;
+                if (h > maxPageH) maxPageH = h;
             }
-            if (!string.IsNullOrEmpty(footerTimestamp) && selectedCategory != 0) total += (int)(24 * s);
-            return Math.Max((int)(190 * s), total + (int)(10 * s));
+            int result = Math.Max((int)(190 * s), maxPageH);
+            if (MaxHeight > 0) result = Math.Min(MaxHeight, result);
+            return result;
         }
 
-        void RecalculateLayout() {
+        internal void RecalculateLayout() {
             int req = CalculateRequiredHeight();
             if (Height != req) {
                 Height = req;
@@ -354,7 +503,8 @@ namespace GTBook {
         protected override void OnMouseMove(MouseEventArgs e) {
             base.OnMouseMove(e);
             int divY;
-            var chips = LayoutChips(out divY);
+            RectangleF pRect, nRect;
+            var chips = LayoutChips(totalPages > 1, out divY, out pRect, out nRect);
             int newHover = -1;
             for (int i = 0; i < chips.Length; i++) {
                 if (chips[i].Contains(e.Location)) {
@@ -363,13 +513,20 @@ namespace GTBook {
                 }
             }
 
+            int newPagerHover = 0;
+            if (totalPages > 1) {
+                if (!pRect.IsEmpty && pRect.Contains(e.Location) && currentPage > 0) newPagerHover = -1;
+                else if (!nRect.IsEmpty && nRect.Contains(e.Location) && currentPage < totalPages - 1) newPagerHover = 1;
+            }
+
             bool overRefresh = (!refreshBtnBounds.IsEmpty && refreshBtnBounds.Contains(e.Location));
-            if (overRefresh != hoveredRefreshBtn) {
+            if (overRefresh != hoveredRefreshBtn || newPagerHover != hoveredPager) {
                 hoveredRefreshBtn = overRefresh;
+                hoveredPager = newPagerHover;
                 Invalidate();
             }
 
-            Cursor = (newHover != -1 || overRefresh) ? Cursors.Hand : Cursors.Default;
+            Cursor = (newHover != -1 || overRefresh || newPagerHover != 0) ? Cursors.Hand : Cursors.Default;
 
             if (newHover != hoveredCategory) {
                 hoveredCategory = newHover;
@@ -379,9 +536,10 @@ namespace GTBook {
 
         protected override void OnMouseLeave(EventArgs e) {
             base.OnMouseLeave(e);
-            if (hoveredCategory != -1 || hoveredRefreshBtn) {
+            if (hoveredCategory != -1 || hoveredRefreshBtn || hoveredPager != 0) {
                 hoveredCategory = -1;
                 hoveredRefreshBtn = false;
+                hoveredPager = 0;
                 Cursor = Cursors.Default;
                 Invalidate();
             }
@@ -390,7 +548,6 @@ namespace GTBook {
         protected override void OnMouseDown(MouseEventArgs e) {
             base.OnMouseDown(e);
 
-            // Check refresh battery button click
             if (!refreshBtnBounds.IsEmpty && refreshBtnBounds.Contains(e.Location)) {
                 if (!isRefreshingBattery && OnRefreshBattery != null) {
                     isRefreshingBattery = true;
@@ -400,17 +557,106 @@ namespace GTBook {
                 return;
             }
 
-            // Check category chips
+            if (totalPages > 1) {
+                if (!prevPageBounds.IsEmpty && prevPageBounds.Contains(e.Location) && currentPage > 0) {
+                    currentPage--;
+                    Invalidate();
+                    return;
+                }
+                if (!nextPageBounds.IsEmpty && nextPageBounds.Contains(e.Location) && currentPage < totalPages - 1) {
+                    currentPage++;
+                    Invalidate();
+                    return;
+                }
+            }
+
             int divY;
-            var chips = LayoutChips(out divY);
+            RectangleF pRect, nRect;
+            var chips = LayoutChips(totalPages > 1, out divY, out pRect, out nRect);
             for (int i = 0; i < chips.Length; i++) {
                 if (chips[i].Contains(e.Location)) {
-                    if (selectedCategory != i) {
-                        selectedCategory = i;
-                        RecalculateLayout();
-                        Invalidate();
-                    }
+                    SelectCategory(i);
                     break;
+                }
+            }
+        }
+
+        void DrawTile(Graphics g, SpecItem item, RectangleF tileRect, bool isBatteryHealth, float s) {
+            Color tileBg = Theme.Tone(Color.FromArgb(252, 250, 246), Color.FromArgb(20, 25, 34));
+            Color tileBorder = Theme.Tone(Color.FromArgb(230, 222, 212), Color.FromArgb(40, 48, 64));
+
+            using (var tp = Theme.Round(tileRect, 10 * s)) {
+                using (var tb = new SolidBrush(tileBg)) g.FillPath(tb, tp);
+                using (var tpen = new Pen(tileBorder, 1f * s)) g.DrawPath(tpen, tp);
+            }
+
+            int tileW = (int)tileRect.Width;
+            int textW = Math.Max(40, tileW - (int)(24 * s));
+            int titleH, subH, barOffset, tileH;
+            MeasureItemHeights(item, tileW, s, out titleH, out subH, out barOffset, out tileH, isBatteryHealth);
+
+            using (var tf = new Font("Segoe UI", 10f, FontStyle.Bold)) {
+                var titleRect = new Rectangle((int)(tileRect.X + 12 * s), (int)(tileRect.Y + 7 * s), textW, titleH);
+                TextRenderer.DrawText(g, item.Title ?? "", tf, titleRect, Theme.Ink, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix);
+            }
+
+            if (subH > 0) {
+                using (var sf = new Font("Segoe UI", 8.5f)) {
+                    var subRect = new Rectangle((int)(tileRect.X + 12 * s), (int)(tileRect.Y + 7 * s) + titleH + (int)(2 * s), textW, subH);
+                    TextRenderer.DrawText(g, item.Subtitle, sf, subRect, Theme.Muted, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix);
+                }
+            }
+
+            float barBottom = tileRect.Y + barOffset + 2 * s;
+            if (item.BarPercent.HasValue) {
+                float pct = Math.Max(0, Math.Min(100, item.BarPercent.Value));
+                float barY = tileRect.Y + barOffset + 2 * s;
+                float barW = tileRect.Width - 24 * s;
+                float barH = 7 * s;
+                var trackRect = new RectangleF(tileRect.X + 12 * s, barY, barW, barH);
+                var fillRect = new RectangleF(tileRect.X + 12 * s, barY, Math.Max(barH, barW * pct / 100f), barH);
+
+                using (var trackP = Theme.Round(trackRect, 4f * s)) {
+                    using (var trackB = new SolidBrush(Theme.Tone(Color.FromArgb(225, 218, 208), Color.FromArgb(36, 44, 58)))) g.FillPath(trackB, trackP);
+                }
+
+                Color barColor = item.Section.Contains("BATTERY") ? (pct >= 80 ? Color.FromArgb(46, 204, 113) : pct >= 50 ? Theme.OrangeEnd : Color.FromArgb(231, 76, 60)) : Theme.OrangeEnd;
+                using (var fillP = Theme.Round(fillRect, 4f * s)) {
+                    using (var fillB = new SolidBrush(barColor)) g.FillPath(fillB, fillP);
+                }
+                barBottom = barY + barH;
+            }
+
+            if (isBatteryHealth) {
+                bool stackRefresh = tileW < (int)(360 * s);
+                float btnY = barBottom + 6 * s;
+                float btnW = Math.Min(146 * s, tileRect.Width - 24 * s);
+                float btnH = 26 * s;
+                var btnRect = new RectangleF(tileRect.X + 12 * s, btnY, btnW, btnH);
+                refreshBtnBounds = btnRect;
+
+                bool rActive = isRefreshingBattery;
+                bool rHover = hoveredRefreshBtn;
+                Color btnBg = (rActive || rHover) ? Theme.OrangeEnd : Theme.Tone(Color.FromArgb(240, 234, 226), Color.FromArgb(32, 40, 54));
+                Color btnText = (rActive || rHover) ? Color.White : Theme.Ink;
+                Color btnBorder = (rActive || rHover) ? Theme.OrangeEnd : Theme.Tone(Color.FromArgb(215, 205, 195), Color.FromArgb(50, 60, 78));
+
+                using (var bp = Theme.Round(btnRect, 6 * s)) {
+                    using (var b = new SolidBrush(btnBg)) g.FillPath(b, bp);
+                    using (var p = new Pen(btnBorder, 1f * s)) g.DrawPath(p, bp);
+                }
+
+                string btnLabel = isRefreshingBattery ? "⟳ Refreshing…" : "⟳ Refresh Battery";
+                using (var bf = new Font("Segoe UI", 8.5f, FontStyle.Bold)) {
+                    TextRenderer.DrawText(g, btnLabel, bf, Rectangle.Round(btnRect), btnText, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                }
+
+                string timeText = string.IsNullOrEmpty(lastMeasuredTime) ? DateTime.Now.ToString("dd MMM yyyy · HH:mm:ss") : lastMeasuredTime;
+                var timeRect = stackRefresh
+                    ? new Rectangle((int)(tileRect.X + 12 * s), (int)(btnRect.Bottom + 3 * s), Math.Max(40, (int)(tileRect.Width - 24 * s)), (int)(16 * s))
+                    : new Rectangle((int)(btnRect.Right + 10 * s), (int)btnY, Math.Max(40, (int)(tileRect.Right - btnRect.Right - 18 * s)), (int)btnH);
+                using (var tf = new Font("Segoe UI", 8.5f)) {
+                    TextRenderer.DrawText(g, "Measured: " + timeText, tf, timeRect, Theme.Muted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
                 }
             }
         }
@@ -422,9 +668,20 @@ namespace GTBook {
             float s = DeviceDpi / 96f;
             refreshBtnBounds = RectangleF.Empty;
 
-            // 1. Draw Category Chips
+            int colW, colGap;
+            bool twoCol;
+            var allRows = BuildRows(s, out colW, out colGap, out twoCol);
             int divY;
-            var chips = LayoutChips(out divY);
+            bool needsPager;
+            var pages = PaginateRows(allRows, s, out divY, out needsPager);
+            totalPages = Math.Max(1, pages.Count);
+            if (currentPage >= totalPages) currentPage = totalPages - 1;
+
+            RectangleF pRect, nRect;
+            var chips = LayoutChips(needsPager, out divY, out pRect, out nRect);
+            prevPageBounds = pRect;
+            nextPageBounds = nRect;
+
             for (int i = 0; i < Categories.Length; i++) {
                 var chipRect = chips[i];
                 bool active = (i == selectedCategory);
@@ -434,7 +691,7 @@ namespace GTBook {
                 Color chipText = active ? Color.White : hover ? Theme.OrangeInk : Theme.Ink;
                 Color chipBorder = active ? Theme.OrangeEnd : Theme.Tone(Color.FromArgb(220, 210, 200), Color.FromArgb(50, 60, 80));
 
-                using (var path = Theme.Round(chipRect, 14 * s)) {
+                using (var path = Theme.Round(chipRect, 13 * s)) {
                     using (var b = new SolidBrush(chipBg)) g.FillPath(b, path);
                     using (var p = new Pen(chipBorder, 1f * s)) g.DrawPath(p, path);
                 }
@@ -444,126 +701,69 @@ namespace GTBook {
                 }
             }
 
-            // Divider below chips
+            if (needsPager) {
+                for (int d = -1; d <= 1; d += 2) {
+                    var pr = d < 0 ? pRect : nRect;
+                    bool enabled = d < 0 ? currentPage > 0 : currentPage < totalPages - 1;
+                    bool hover = hoveredPager == d;
+                    Color bg = hover ? Theme.Tone(Color.FromArgb(235, 230, 222), Color.FromArgb(38, 46, 62)) : Theme.Tone(Color.FromArgb(246, 242, 236), Color.FromArgb(24, 29, 39));
+                    Color fg = !enabled ? Theme.Muted : (hover ? Theme.OrangeInk : Theme.Ink);
+                    Color bd = Theme.Tone(Color.FromArgb(220, 210, 200), Color.FromArgb(50, 60, 80));
+                    using (var path = Theme.Round(pr, 10 * s)) {
+                        using (var b = new SolidBrush(bg)) g.FillPath(b, path);
+                        using (var p = new Pen(bd, 1f * s)) g.DrawPath(p, path);
+                    }
+                    using (var f = new Font(Font.FontFamily, 9f, FontStyle.Bold)) {
+                        TextRenderer.DrawText(g, d < 0 ? "<" : ">", f, Rectangle.Round(pr), fg, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                    }
+                }
+                var labelRect = new Rectangle((int)pRect.Right, (int)pRect.Top, Math.Max(20, (int)(nRect.Left - pRect.Right)), (int)pRect.Height);
+                using (var f = new Font(Font.FontFamily, 8.5f, FontStyle.Bold)) {
+                    TextRenderer.DrawText(g, (currentPage + 1) + "/" + totalPages, f, labelRect, Theme.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                }
+            }
+
             using (var p = new Pen(Theme.Tone(Color.FromArgb(228, 218, 208), Color.FromArgb(42, 50, 66)), 1f * s)) {
                 g.DrawLine(p, 4 * s, divY, Width - 4 * s, divY);
             }
 
-            // 2. Draw Spec Items
-            var visible = GetFilteredItems();
-            int curY = divY + (int)(10 * s);
-            string lastSection = "";
+            var pageRows = pages.Count > 0 ? pages[currentPage] : new List<SpecRow>();
+            int curY = divY + (int)(8 * s);
             int itemW = Math.Max((int)(120 * s), Width - (int)(8 * s));
-            int textW = Math.Max(40, itemW - (int)(28 * s));
 
-            foreach (var item in visible) {
-                // Section Header Badge
-                if (item.Section != lastSection) {
-                    lastSection = item.Section;
-                    using (var sf = new Font(Font.FontFamily, 8f, FontStyle.Bold)) {
-                        var badgeSize = TextRenderer.MeasureText(g, item.Section, sf, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
-                        var badgeRect = new RectangleF(6 * s, curY, Math.Min(itemW - 12 * s, badgeSize.Width + 14 * s), 18 * s);
+            foreach (var row in pageRows) {
+                if (row.SectionHeader != null) {
+                    using (var sf = new Font(Font.FontFamily, 7.5f, FontStyle.Bold)) {
+                        var badgeSize = TextRenderer.MeasureText(g, row.SectionHeader, sf, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
+                        var badgeRect = new RectangleF(6 * s, curY, Math.Min(itemW - 12 * s, badgeSize.Width + 12 * s), 16 * s);
                         using (var bp = Theme.Round(badgeRect, 5 * s)) {
                             using (var bb = new SolidBrush(Theme.Tone(Color.FromArgb(255, 235, 215), Color.FromArgb(42, 34, 28)))) g.FillPath(bb, bp);
                         }
-                        TextRenderer.DrawText(g, item.Section, sf, Rectangle.Round(badgeRect), Theme.OrangeInk, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                        TextRenderer.DrawText(g, row.SectionHeader, sf, Rectangle.Round(badgeRect), Theme.OrangeInk, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
 
-                        // Horizontal accent line
-                        if (badgeRect.Right + 12 * s < Width - 6 * s) {
+                        if (badgeRect.Right + 10 * s < Width - 6 * s) {
                             using (var lp = new Pen(Theme.Tone(Color.FromArgb(235, 225, 215), Color.FromArgb(36, 44, 58)), 1f * s)) {
-                                g.DrawLine(lp, badgeRect.Right + 8 * s, curY + 9 * s, Width - 6 * s, curY + 9 * s);
+                                g.DrawLine(lp, badgeRect.Right + 8 * s, curY + 8 * s, Width - 6 * s, curY + 8 * s);
                             }
                         }
                     }
-                    curY += (int)(26 * s);
+                    curY += (int)(22 * s);
                 }
 
-                bool isBatteryHealth = item.Section.Contains("BATTERY HEALTH") || (selectedCategory == 0 && item == visible.Last());
-                int titleH, subH, barOffset, tileH;
-                MeasureItemHeights(item, textW, s, out titleH, out subH, out barOffset, out tileH, isBatteryHealth);
-                var tileRect = new RectangleF(4 * s, curY, itemW, tileH);
-                Color tileBg = Theme.Tone(Color.FromArgb(252, 250, 246), Color.FromArgb(20, 25, 34));
-                Color tileBorder = Theme.Tone(Color.FromArgb(230, 222, 212), Color.FromArgb(40, 48, 64));
-
-                using (var tp = Theme.Round(tileRect, 10 * s)) {
-                    using (var tb = new SolidBrush(tileBg)) g.FillPath(tb, tp);
-                    using (var tpen = new Pen(tileBorder, 1f * s)) g.DrawPath(tpen, tp);
+                if (row.Right == null) {
+                    int w = twoCol ? itemW : colW;
+                    DrawTile(g, row.Left, new RectangleF(4 * s, curY, w, row.Height), row.LeftIsBatteryHealth, s);
+                } else {
+                    DrawTile(g, row.Left, new RectangleF(4 * s, curY, colW, row.Height), row.LeftIsBatteryHealth, s);
+                    DrawTile(g, row.Right, new RectangleF(4 * s + colW + colGap, curY, colW, row.Height), row.RightIsBatteryHealth, s);
                 }
 
-                // Title
-                using (var tf = new Font("Segoe UI", 10.5f, FontStyle.Bold)) {
-                    var titleRect = new Rectangle((int)(tileRect.X + 14 * s), (int)(tileRect.Y + 8 * s), textW, titleH);
-                    TextRenderer.DrawText(g, item.Title ?? "", tf, titleRect, Theme.Ink, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix);
-                }
-
-                // Subtitle
-                if (subH > 0) {
-                    using (var sf = new Font("Segoe UI", 9f)) {
-                        var subRect = new Rectangle((int)(tileRect.X + 14 * s), (int)(tileRect.Y + 8 * s) + titleH + (int)(2 * s), textW, subH);
-                        TextRenderer.DrawText(g, item.Subtitle, sf, subRect, Theme.Muted, TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix);
-                    }
-                }
-
-                // Progress Bar (if available)
-                float barBottom = tileRect.Y + barOffset + 2 * s;
-                if (item.BarPercent.HasValue) {
-                    float pct = Math.Max(0, Math.Min(100, item.BarPercent.Value));
-                    float barY = tileRect.Y + barOffset + 2 * s;
-                    float barW = tileRect.Width - 28 * s;
-                    float barH = 8 * s;
-                    var trackRect = new RectangleF(tileRect.X + 14 * s, barY, barW, barH);
-                    var fillRect = new RectangleF(tileRect.X + 14 * s, barY, Math.Max(barH, barW * pct / 100f), barH);
-
-                    using (var trackP = Theme.Round(trackRect, 4f * s)) {
-                        using (var trackB = new SolidBrush(Theme.Tone(Color.FromArgb(225, 218, 208), Color.FromArgb(36, 44, 58)))) g.FillPath(trackB, trackP);
-                    }
-
-                    Color barColor = item.Section.Contains("BATTERY") ? (pct >= 80 ? Color.FromArgb(46, 204, 113) : pct >= 50 ? Theme.OrangeEnd : Color.FromArgb(231, 76, 60)) : Theme.OrangeEnd;
-                    using (var fillP = Theme.Round(fillRect, 4f * s)) {
-                        using (var fillB = new SolidBrush(barColor)) g.FillPath(fillB, fillP);
-                    }
-                    barBottom = barY + barH;
-                }
-
-                // Dedicated Refresh Button and Date & Time Timestamp on Battery Health tile
-                if (isBatteryHealth) {
-                    float btnY = barBottom + 8 * s;
-                    float btnW = 152 * s;
-                    float btnH = 28 * s;
-                    var btnRect = new RectangleF(tileRect.X + 14 * s, btnY, btnW, btnH);
-                    refreshBtnBounds = btnRect;
-
-                    bool rActive = isRefreshingBattery;
-                    bool rHover = hoveredRefreshBtn;
-                    Color btnBg = (rActive || rHover) ? Theme.OrangeEnd : Theme.Tone(Color.FromArgb(240, 234, 226), Color.FromArgb(32, 40, 54));
-                    Color btnText = (rActive || rHover) ? Color.White : Theme.Ink;
-                    Color btnBorder = (rActive || rHover) ? Theme.OrangeEnd : Theme.Tone(Color.FromArgb(215, 205, 195), Color.FromArgb(50, 60, 78));
-
-                    using (var bp = Theme.Round(btnRect, 6 * s)) {
-                        using (var b = new SolidBrush(btnBg)) g.FillPath(b, bp);
-                        using (var p = new Pen(btnBorder, 1f * s)) g.DrawPath(p, bp);
-                    }
-
-                    string btnLabel = isRefreshingBattery ? "⟳ Refreshing…" : "⟳ Refresh Battery";
-                    using (var bf = new Font("Segoe UI", 9f, FontStyle.Bold)) {
-                        TextRenderer.DrawText(g, btnLabel, bf, Rectangle.Round(btnRect), btnText, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
-                    }
-
-                    // Date & Time Timestamp
-                    string timeText = string.IsNullOrEmpty(lastMeasuredTime) ? DateTime.Now.ToString("dd MMM yyyy · HH:mm:ss") : lastMeasuredTime;
-                    var timeRect = new Rectangle((int)(btnRect.Right + 12 * s), (int)btnY, Math.Max(40, (int)(tileRect.Right - btnRect.Right - 20 * s)), (int)btnH);
-                    using (var tf = new Font("Segoe UI", 9f)) {
-                        TextRenderer.DrawText(g, "📅 Measured: " + timeText, tf, timeRect, Theme.Muted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-                    }
-                }
-
-                curY += tileH + (int)(6 * s);
+                curY += row.Height + (int)(5 * s);
             }
 
-            // Timestamp footer (if not already shown on battery tile)
             if (!string.IsNullOrEmpty(footerTimestamp) && selectedCategory != 0) {
-                using (var ff = new Font("Segoe UI", 8.5f, FontStyle.Italic)) {
-                    var footRect = new Rectangle((int)(6 * s), curY + (int)(4 * s), Math.Max(40, (int)(Width - 12 * s)), (int)(18 * s));
+                using (var ff = new Font("Segoe UI", 8f, FontStyle.Italic)) {
+                    var footRect = new Rectangle((int)(6 * s), curY + (int)(2 * s), Math.Max(40, (int)(Width - 12 * s)), (int)(16 * s));
                     TextRenderer.DrawText(g, footerTimestamp, ff, footRect, Theme.Muted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 }
             }

@@ -142,7 +142,10 @@ namespace GTBook
 
 		private readonly Dictionary<string, Control[]> cachedPages = new Dictionary<string, Control[]>();
 
-		private readonly Dictionary<string, Point> scrollPositions = new Dictionary<string, Point>();
+		private BufferedPanel lightingTabs, settingsTabs;
+		private RaisedButton keyboardTabBtn, rearTabBtn, settingsTabPrimaryBtn, settingsTabSecondaryBtn;
+		private SoftPanel keyboardCardRef, rearCardRef, settingsPrefCard, settingsPowerCard, settingsKeysCard;
+		private bool lightingShowRear, settingsShowSecondary;
 
 		private string keyboardResult = "Not applied in this session";
 
@@ -226,15 +229,15 @@ namespace GTBook
             Label title = card.Controls.OfType<Label>().FirstOrDefault(l => l != desc);
             if (title != null && !title.IsDisposed) {
                 int tw = Math.Max(S(80), card.Width - S(44));
-                title.Location = new Point(S(22), S(16));
+                title.Location = new Point(S(22), S(12));
                 title.Width = tw;
-                title.Height = MeasureLabelHeight(title, tw, S(34));
+                title.Height = MeasureLabelHeight(title, tw, S(28));
             }
             if (desc != null && !desc.IsDisposed) {
                 int dw = Math.Max(S(80), card.Width - S(46));
-                desc.Location = new Point(S(23), title != null && !title.IsDisposed ? Math.Max(S(50), title.Bottom + S(2)) : S(50));
+                desc.Location = new Point(S(23), title != null && !title.IsDisposed ? (title.Bottom + S(2)) : S(42));
                 desc.Width = dw;
-                desc.Height = MeasureLabelHeight(desc, dw, S(22));
+                desc.Height = MeasureLabelHeight(desc, dw, S(20));
             }
         }
         private void ConfigureWrappingCheckBox(CheckBox cb, int cardWidth, int leftPx = 22) {
@@ -380,15 +383,15 @@ namespace GTBook
 			BufferedPanel panel = new BufferedPanel
 			{
 				Dock = DockStyle.Top,
-				Height = S(110),
+				Height = S(92),
                 BackColor=Color.Transparent
 			};
-            pageEyebrow.SetBounds(S(30),S(12),S(620),S(18));pageEyebrow.UseMnemonic=false;pageEyebrow.Font=new Font("Segoe UI",8,FontStyle.Bold);pageEyebrow.ForeColor=Theme.OrangeInk;pageEyebrow.BackColor=Color.Transparent;panel.Controls.Add(pageEyebrow);
-			heading.SetBounds(S(28), S(31), S(620), S(46));
-			heading.Font = new Font("Segoe UI", 22f, FontStyle.Bold);
+            pageEyebrow.SetBounds(S(30),S(6),S(620),S(16));pageEyebrow.UseMnemonic=false;pageEyebrow.Font=new Font("Segoe UI",8,FontStyle.Bold);pageEyebrow.ForeColor=Theme.OrangeInk;pageEyebrow.BackColor=Color.Transparent;panel.Controls.Add(pageEyebrow);
+			heading.SetBounds(S(28), S(24), S(620), S(38));
+			heading.Font = new Font("Segoe UI", 20.5f, FontStyle.Bold);
 			heading.ForeColor = ink;
             heading.BackColor=Color.Transparent;
-			subtitle.SetBounds(S(30), S(78), S(690), S(26));
+			subtitle.SetBounds(S(30), S(64), S(690), S(22));
 			subtitle.ForeColor = muted;
             subtitle.BackColor=Color.Transparent;
 			panel.Controls.Add(heading);
@@ -396,17 +399,22 @@ namespace GTBook
             panel.Resize+=(s,e)=>{
                 int width=Math.Max(S(120),panel.ClientSize.Width-S(56));
                 heading.Width=width;pageEyebrow.Width=width;subtitle.Width=width;
-                int subH=MeasureLabelHeight(subtitle,width,S(24));
+                bool hasEyebrow=!string.IsNullOrEmpty(pageEyebrow.Text);
+                pageEyebrow.Visible=hasEyebrow;
+                pageEyebrow.Top=S(8);
+                heading.Top=hasEyebrow?Math.Max(S(24),pageEyebrow.Bottom+S(1)):S(14);
+                subtitle.Top=heading.Bottom+S(2);
+                int subH=MeasureLabelHeight(subtitle,width,S(22));
                 if(subtitle.Height!=subH)subtitle.Height=subH;
-                int needH=Math.Max(S(110),subtitle.Bottom+S(6));
+                int needH=Math.Max(hasEyebrow?S(92):S(82),subtitle.Bottom+S(6));
                 if(panel.Height!=needH)panel.Height=needH;
             };
 			BufferedPanel panel2 = new BufferedPanel
 			{
 				Dock = DockStyle.Bottom,
-				Height = S(68),
+				Height = S(44),
                 BackColor=Color.Transparent,
-				Padding = SPadding(28, 12, 24, 12)
+				Padding = SPadding(28, 6, 24, 8)
 			};
 			status.Dock = DockStyle.Fill;
 			status.Font = new Font("Segoe UI", 10f);
@@ -425,16 +433,12 @@ namespace GTBook
 				Dock = DockStyle.Fill,
 				FlowDirection = FlowDirection.TopDown,
 				WrapContents = false,
-				AutoScroll = true,
-				Padding = SPadding(0, 0, 8, 12)
+				AutoScroll = false,
+				Padding = SPadding(0, 0, 0, 6)
 			};
 			page.SizeChanged += delegate
 			{
 				FitCards();
-			};
-			page.Scroll += delegate
-			{
-				if (page.IsHandleCreated) page.Invalidate(true);
 			};
 			panel3.Controls.Add(page);
 			body.Controls.Add(panel3);
@@ -692,23 +696,90 @@ namespace GTBook
             if(fittingCards)return;fittingCards=true;page.SuspendLayout();
             try{
                 float s=DpiScale;
-                for(int pass=0;pass<2;pass++){
-                    int clientWBefore=page.ClientSize.Width;
-                    int available=Math.Max(S(240),clientWBefore-page.Padding.Horizontal-(int)(20*s)),gap=(int)(16*s);
-                    bool wide=selectedPage=="Lighting"&&available>=(int)(1160*s);
-                    page.FlowDirection=wide?FlowDirection.LeftToRight:FlowDirection.TopDown;page.WrapContents=wide;
-                    int index=0;
-                    foreach(Control control in page.Controls){
-                        control.Width=wide?(index<2?(available-gap)/2:available):Math.Max(S(320),Math.Min(available,(int)(1100*s)));
-                        control.Margin=new Padding(0,0,wide&&index==0?gap:0,(int)(14*s));
-                        page.SetFlowBreak(control,wide&&index>0);
-                        TriggerCardReflow(control);
-                        index++;
+                int clientW=page.ClientSize.Width;
+                int available=Math.Max(S(240),clientW-page.Padding.Horizontal-(int)(4*s)),gap=(int)(12*s);
+                if(selectedPage=="Lighting"&&keyboardCardRef!=null&&rearCardRef!=null){
+                    bool wide=available>=(int)(1160*s);
+                    page.FlowDirection=wide?FlowDirection.LeftToRight:FlowDirection.TopDown;
+                    page.WrapContents=wide;
+                    if(lightingTabs!=null&&!lightingTabs.IsDisposed){
+                        lightingTabs.Visible=!wide;
+                        if(!wide){
+                            int tabW=Math.Max(S(320),Math.Min(available,(int)(1100*s)));
+                            lightingTabs.Width=tabW;lightingTabs.Height=S(36);lightingTabs.Margin=new Padding(0,0,0,S(8));
+                            int bw=Math.Min(S(220),Math.Max(S(110),(tabW-S(10))/2));
+                            if(keyboardTabBtn!=null&&!keyboardTabBtn.IsDisposed){keyboardTabBtn.SetBounds(0,0,bw,S(34));keyboardTabBtn.Selected=!lightingShowRear;}
+                            if(rearTabBtn!=null&&!rearTabBtn.IsDisposed){rearTabBtn.SetBounds(bw+S(10),0,bw,S(34));rearTabBtn.Selected=lightingShowRear;}
+                        }
+                        page.SetFlowBreak(lightingTabs,false);
                     }
-                    page.ResumeLayout(true);
-                    if(page.ClientSize.Width==clientWBefore)break;
-                    page.SuspendLayout();
+                    if(wide){
+                        int colW=(available-gap)/2;
+                        keyboardCardRef.Visible=true;rearCardRef.Visible=true;
+                        keyboardCardRef.Width=colW;rearCardRef.Width=colW;
+                        keyboardCardRef.Margin=new Padding(0,0,gap,0);rearCardRef.Margin=Padding.Empty;
+                        page.SetFlowBreak(keyboardCardRef,false);page.SetFlowBreak(rearCardRef,true);
+                        TriggerCardReflow(keyboardCardRef);TriggerCardReflow(rearCardRef);
+                    }else{
+                        int cardW=Math.Max(S(320),Math.Min(available,(int)(1100*s)));
+                        keyboardCardRef.Visible=!lightingShowRear;rearCardRef.Visible=lightingShowRear;
+                        var active=lightingShowRear?rearCardRef:keyboardCardRef;
+                        active.Width=cardW;active.Margin=Padding.Empty;
+                        page.SetFlowBreak(keyboardCardRef,false);page.SetFlowBreak(rearCardRef,false);
+                        TriggerCardReflow(active);
+                    }
+                }else if(selectedPage=="Settings"&&settingsPrefCard!=null&&settingsPowerCard!=null&&settingsKeysCard!=null&&updateCardRef!=null){
+                    bool twoCol=available>=(int)(580*s);
+                    if(settingsTabs!=null&&!settingsTabs.IsDisposed){
+                        settingsTabs.Visible=!twoCol;
+                        if(!twoCol){
+                            settingsTabs.Width=available;settingsTabs.Height=S(36);settingsTabs.Margin=new Padding(0,0,0,S(8));
+                            int bw=Math.Max(S(110),(available-S(10))/2);
+                            if(settingsTabPrimaryBtn!=null&&!settingsTabPrimaryBtn.IsDisposed){settingsTabPrimaryBtn.SetBounds(0,0,bw,S(34));settingsTabPrimaryBtn.Selected=!settingsShowSecondary;}
+                            if(settingsTabSecondaryBtn!=null&&!settingsTabSecondaryBtn.IsDisposed){settingsTabSecondaryBtn.SetBounds(bw+S(10),0,bw,S(34));settingsTabSecondaryBtn.Selected=settingsShowSecondary;}
+                        }
+                        page.SetFlowBreak(settingsTabs,false);
+                    }
+                    if(twoCol){
+                        page.FlowDirection=FlowDirection.LeftToRight;page.WrapContents=true;
+                        int colW=(available-gap)/2;
+                        Control[] cards=new Control[]{settingsPrefCard,settingsPowerCard,settingsKeysCard,updateCardRef};
+                        foreach(Control c in cards){c.Visible=true;c.Width=colW;TriggerCardReflow(c);}
+                        int row1H=Math.Max(settingsPrefCard.Height,settingsPowerCard.Height);
+                        settingsPrefCard.Height=row1H;settingsPowerCard.Height=row1H;
+                        int row2H=Math.Max(settingsKeysCard.Height,updateCardRef.Height);
+                        settingsKeysCard.Height=row2H;updateCardRef.Height=row2H;
+                        settingsPrefCard.Margin=new Padding(0,0,gap,S(10));
+                        settingsPowerCard.Margin=new Padding(0,0,0,S(10));
+                        settingsKeysCard.Margin=new Padding(0,0,gap,0);
+                        updateCardRef.Margin=Padding.Empty;
+                        page.SetFlowBreak(settingsPrefCard,false);page.SetFlowBreak(settingsPowerCard,true);
+                        page.SetFlowBreak(settingsKeysCard,false);page.SetFlowBreak(updateCardRef,true);
+                    }else{
+                        page.FlowDirection=FlowDirection.TopDown;page.WrapContents=false;
+                        settingsPrefCard.Visible=!settingsShowSecondary;settingsPowerCard.Visible=!settingsShowSecondary;
+                        settingsKeysCard.Visible=settingsShowSecondary;updateCardRef.Visible=settingsShowSecondary;
+                        Control[] visible=settingsShowSecondary?new Control[]{settingsKeysCard,updateCardRef}:new Control[]{settingsPrefCard,settingsPowerCard};
+                        for(int i=0;i<visible.Length;i++){
+                            visible[i].Width=available;
+                            visible[i].Margin=new Padding(0,0,0,i==0?S(8):0);
+                            page.SetFlowBreak(visible[i],false);
+                            TriggerCardReflow(visible[i]);
+                        }
+                    }
+                }else{
+                    page.FlowDirection=FlowDirection.TopDown;page.WrapContents=false;
+                    int cardW=Math.Max(S(320),Math.Min(available,(int)(1100*s)));
+                    int count=page.Controls.Count;
+                    for(int i=0;i<count;i++){
+                        Control control=page.Controls[i];
+                        control.Width=cardW;
+                        control.Margin=new Padding(0,0,0,i<count-1?S(10):0);
+                        page.SetFlowBreak(control,false);
+                        TriggerCardReflow(control);
+                    }
                 }
+                page.ResumeLayout(true);
             }finally{
                 if(fittingCards){
                     try{page.ResumeLayout(false);}catch{}
@@ -786,6 +857,7 @@ namespace GTBook
 					}
 				}
 			}
+            lightingShowRear = true;
 			ShowPage("Lighting");
 			rearState.Applied(new Request
 			{
@@ -811,7 +883,7 @@ namespace GTBook
                 using(var image=new Bitmap(control.Width,control.Height)){control.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));image.Save(Path.Combine(directory,"Rear-preview-"+effect+".png"));}
             }
 			rearState.PreviewDraft=false;UpdateRearIndicator();
-			page.AutoScrollPosition = Point.Empty;
+            lightingShowRear = false;FitCards();
 			keyboard.Effect = "Aurora";
 			SyncKeyboardEditor();
 			Application.DoEvents();
@@ -869,6 +941,7 @@ namespace GTBook
 #if TESTING
         internal void VerifyRearControls(){
             ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Location=new Point(-32000,-32000);Show();
+            lightingShowRear=true;
             foreach(int width in new[]{860,1080,1920}){
                 ClientSize=new Size(width,1080);ShowPage("Lighting");PerformLayout();page.PerformLayout();Application.DoEvents();
                 foreach(string effect in RearLighting.Names){
@@ -899,7 +972,8 @@ namespace GTBook
             foreach(string title in new[]{"Overview","Lighting","Settings","Device & help"}){
                 ShowPage(title);Application.DoEvents();
                 if(heading.ForeColor.ToArgb()!=Theme.Ink.ToArgb())throw new Exception("Cached heading retained light colours.");
-                if(page.Controls[0].BackColor.ToArgb()!=Theme.White.ToArgb())throw new Exception("Cached card retained light colours: "+title);
+                var firstCard=page.Controls.OfType<SoftPanel>().First(c=>c.Visible);
+                if(firstCard.BackColor.ToArgb()!=Theme.White.ToArgb())throw new Exception("Cached card retained light colours: "+title);
             }
             if(zoneButtons[0].BackColor.ToArgb()!=swatch.ToArgb())throw new Exception("Theme changed the hardware colour selection.");
             if(details.BackColor.ToArgb()!=Theme.White.ToArgb())throw new Exception("Device details retained a white background.");
@@ -908,15 +982,16 @@ namespace GTBook
         }
         internal void VerifyLightingLayout(){
             ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Location=new Point(-32000,-32000);Show();
-            foreach(int width in new[]{1920,860,1920}){
-                ClientSize=new Size(width,1080);ShowPage("Lighting");PerformLayout();page.PerformLayout();Application.DoEvents();
-                var left=page.Controls[0];var right=page.Controls[1];bool wide=width==1920;
-                if(wide){
-                    if(left.Top!=right.Top||right.Left<left.Right||right.Right>page.ClientSize.Width)throw new Exception("Lighting cards are not beside each other inside the viewport.");
-                    if(right.Bottom>page.ClientSize.Height)throw new Exception("Rear-light controls require scrolling in the wide layout.");
-                }else if(right.Top<=left.Top||left.Left!=right.Left)throw new Exception("Compact lighting did not return to a stacked layout.");
-            }
-            var motion=page.Controls[0].Controls.OfType<ComboBox>().Single(control=>control.AccessibleName=="Animation direction");
+            ClientSize=new Size(1920,1080);ShowPage("Lighting");PerformLayout();page.PerformLayout();Application.DoEvents();
+            if(keyboardCardRef.Top!=rearCardRef.Top||rearCardRef.Left<keyboardCardRef.Right||rearCardRef.Right>page.ClientSize.Width)throw new Exception("Lighting cards are not beside each other inside the viewport.");
+            if(rearCardRef.Bottom>page.ClientSize.Height)throw new Exception("Rear-light controls require scrolling in the wide layout.");
+            ClientSize=new Size(860,800);lightingShowRear=false;FitCards();PerformLayout();page.PerformLayout();Application.DoEvents();
+            if(!lightingTabs.Visible||!keyboardCardRef.Visible||rearCardRef.Visible)throw new Exception("Compact lighting should show Keyboard tab only without stacking.");
+            if(keyboardCardRef.Bottom>page.ClientSize.Height)throw new Exception("Keyboard lighting overflowed compact viewport: "+keyboardCardRef.Bottom+" > "+page.ClientSize.Height);
+            rearTabBtn.PerformClick();PerformLayout();page.PerformLayout();Application.DoEvents();
+            if(keyboardCardRef.Visible||!rearCardRef.Visible||rearCardRef.Bottom>page.ClientSize.Height)throw new Exception("Rear lighting overflowed compact viewport.");
+            lightingShowRear=false;FitCards();
+            var motion=keyboardCardRef.Controls.OfType<ComboBox>().Single(control=>control.AccessibleName=="Animation direction");
             motion.SelectedIndex=1;
             syncingKeyboardChoice=true;kbExtraEffect.SelectedIndex=-1;syncingKeyboardChoice=false;
             foreach(string name in ExtraEffects.Names){
@@ -932,12 +1007,24 @@ namespace GTBook
             MinimumSize=Size.Empty;
             ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Location=new Point(-32000,-32000);Show();
             if((CreateParams.ExStyle&0x02000000)==0)throw new Exception("MainWindow missing WS_EX_COMPOSITED double-buffered resize protection.");
+            if(page.AutoScroll)throw new Exception("MainWindow page should not enable AutoScroll.");
             foreach(int width in new[]{1920,860,1280,760,860,1080}){
                 ClientSize=new Size(width,width==1920?1080:(width==760?560:800));
                 foreach(string pageTitle in new[]{"Overview","Lighting","Settings","Device & help"}){
                     ShowPage(pageTitle);PerformLayout();page.PerformLayout();Application.DoEvents();
+                    if(pageEyebrow.Visible&&pageEyebrow.Bottom>heading.Top)throw new Exception("Header eyebrow overlaps heading in "+pageTitle+" @ "+width+": eyebrow="+pageEyebrow.Bounds+" heading="+heading.Bounds);
+                    if(heading.Bottom>subtitle.Top||subtitle.Bottom>heading.Parent.ClientSize.Height)throw new Exception("Header label clipped in "+pageTitle+" @ "+width+": heading="+heading.Bounds+" sub="+subtitle.Bounds+" panel="+heading.Parent.ClientSize);
                     foreach(Control card in page.Controls){
+                        if(!card.Visible)continue;
+                        if(width>=860&&card.Bottom>page.ClientSize.Height+2)throw new Exception("Vertical overflow without scroll in "+pageTitle+" @ "+width+": bottom="+card.Bottom+" viewport="+page.ClientSize.Height+" card="+card.Text);
                         CheckRecursiveFit(card,pageTitle,width);
+                    }
+                    if(pageTitle=="Device & help"&&specView!=null&&!specView.IsDisposed&&width>=860){
+                        specView.SelectCategory(1);PerformLayout();page.PerformLayout();Application.DoEvents();
+                        foreach(Control card in page.Controls){
+                            if(card.Visible&&card.Bottom>page.ClientSize.Height+2)throw new Exception("Vertical overflow in Device & help All @ "+width+": bottom="+card.Bottom+" viewport="+page.ClientSize.Height);
+                        }
+                        specView.SelectCategory(0);
                     }
                     if(pageTitle=="Overview"&&page.Controls.Count>=3){
                         var rightCard=page.Controls[0];
@@ -950,7 +1037,7 @@ namespace GTBook
                         if(hLabels.Length>0&&hLabels[0].Right>healthSyncPill.Left)throw new Exception("System health header overlaps pill at "+width+": title="+hLabels[0].Bounds+" pill="+healthSyncPill.Bounds);
                         if(hLabels.Length>1&&hLabels[0].Bottom>hLabels[1].Top)throw new Exception("System health header overlaps subtitle at "+width+": title="+hLabels[0].Bounds+" sub="+hLabels[1].Bounds);
                     }
-                    if(pageTitle=="Settings"&&updateCardRef!=null&&!updateCardRef.IsDisposed){
+                    if(pageTitle=="Settings"&&updateCardRef!=null&&!updateCardRef.IsDisposed&&updateCardRef.Visible){
                         var uTitle=updateCardRef.Controls.OfType<Label>().FirstOrDefault();
                         if(uTitle!=null&&uTitle.Right>updateStatusPill.Left)throw new Exception("App updates header overlaps pill at "+width+": title="+uTitle.Bounds+" pill="+updateStatusPill.Bounds);
                     }
@@ -1009,34 +1096,34 @@ namespace GTBook
 		private SoftPanel Card(string title, string description, int height)
 		{
 			SoftPanel softPanel = new SoftPanel();
-			softPanel.Padding = SPadding(22, 22, 22, 22);
+			softPanel.Padding = SPadding(22, 18, 22, 18);
 			softPanel.Height = S(height);
-			softPanel.Width = Math.Max(S(320), page.ClientSize.Width - S(28));
-			softPanel.Margin = new Padding(0, 0, 0, S(14));
+			softPanel.Width = Math.Max(S(320), page.ClientSize.Width - S(8));
+			softPanel.Margin = new Padding(0, 0, 0, S(8));
 			SoftPanel softPanel2 = softPanel;
-			Label label = Label(title, 14f, true);
+			Label label = Label(title, 13.5f, true);
 			int titleW = Math.Max(S(80), softPanel2.Width - S(44));
-			label.SetBounds(S(22), S(16), titleW, MeasureLabelHeight(label, titleW, S(34)));
+			label.SetBounds(S(22), S(12), titleW, MeasureLabelHeight(label, titleW, S(28)));
 			label.Anchor = AnchorStyles.Top | AnchorStyles.Left;
 			softPanel2.Controls.Add(label);
 			Label label2 = null;
 			if (description.Length > 0)
 			{
 				label2 = Label(description, 9.5f);
-				label2.SetBounds(S(23), label.Bottom + S(2), softPanel2.Width - S(46), S(38));
+				label2.SetBounds(S(23), label.Bottom + S(2), softPanel2.Width - S(46), S(24));
 				label2.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-				label2.Height = MeasureLabelHeight(label2, label2.Width, S(22));
+				label2.Height = MeasureLabelHeight(label2, label2.Width, S(20));
 				softPanel2.Controls.Add(label2);
 			}
 			RegisterCardReflow(softPanel2, () => {
 				int tw = Math.Max(S(80), softPanel2.Width - S(44));
 				label.Width = tw;
-				label.Height = MeasureLabelHeight(label, tw, S(34));
+				label.Height = MeasureLabelHeight(label, tw, S(28));
 				if (label2 != null && !label2.IsDisposed) {
 					label2.Top = label.Bottom + S(2);
 					label2.Width = Math.Max(S(80), softPanel2.Width - S(46));
-					label2.Height = MeasureLabelHeight(label2, label2.Width, S(22));
-					int needed = label2.Bottom + S(18);
+					label2.Height = MeasureLabelHeight(label2, label2.Width, S(20));
+					int needed = label2.Bottom + S(14);
 					if (softPanel2.Controls.Count == 2) softPanel2.Height = Math.Max(S(height), needed);
 				}
 			});
@@ -1060,10 +1147,8 @@ namespace GTBook
 			if (selectedPage != null)
 			{
 				cachedPages[selectedPage] = page.Controls.Cast<Control>().ToArray();
-				scrollPositions[selectedPage] = new Point(-page.AutoScrollPosition.X, -page.AutoScrollPosition.Y);
 			}
 			page.Controls.Clear();
-			page.AutoScrollPosition = Point.Empty;
 			foreach (Button item in navigation)
 			{
 				((RaisedButton)item).Selected = Convert.ToString(item.Tag ?? item.Text) == title;
@@ -1105,6 +1190,17 @@ namespace GTBook
 			}
 			label2.Text = (string)obj2;
             pageEyebrow.Text=title=="Overview"?"":title=="Device & help"?"DEVICE & SUPPORT":title.ToUpperInvariant();
+            if(heading.Parent!=null&&!heading.Parent.IsDisposed){
+                var hp=heading.Parent;
+                int w=Math.Max(S(120),hp.ClientSize.Width-S(56));
+                bool hasEyebrow=!string.IsNullOrEmpty(pageEyebrow.Text);
+                pageEyebrow.Visible=hasEyebrow;
+                pageEyebrow.Top=S(8);
+                heading.Top=hasEyebrow?Math.Max(S(24),pageEyebrow.Bottom+S(1)):S(14);
+                subtitle.Width=w;subtitle.Top=heading.Bottom+S(2);
+                subtitle.Height=MeasureLabelHeight(subtitle,w,S(22));
+                hp.Height=Math.Max(hasEyebrow?S(92):S(82),subtitle.Bottom+S(6));
+            }
 			Control[] value;
 			if (cachedPages.TryGetValue(title, out value))
 			{
@@ -1135,10 +1231,6 @@ namespace GTBook
 			UpdateBattery();
 			FitCards();
 			page.ResumeLayout();
-			if (scrollPositions.ContainsKey(title))
-			{
-				page.AutoScrollPosition = scrollPositions[title];
-			}
 			SetPreviewAnimation(page, base.Visible && !resizingWindow);
             UpdateUiPolling();
             if(title=="Device & help"&&!preview)BeginInvoke((Action)async delegate{await LoadDeviceInfo();});
@@ -1400,7 +1492,7 @@ namespace GTBook
 		private void CollectCustomFonts(Control parent, List<Font> fonts)
 		{
 			Font baseFont = base.Font;
-			if (parent.Font != null && !object.ReferenceEquals(parent.Font, baseFont) && !fonts.Contains(parent.Font))
+			if (parent.Font != null && !object.ReferenceEquals(parent.Font, baseFont) && !object.ReferenceEquals(parent.Font, Control.DefaultFont) && !parent.Font.IsSystemFont && !fonts.Contains(parent.Font))
 			{
 				fonts.Add(parent.Font);
 			}
@@ -1429,7 +1521,8 @@ namespace GTBook
 				}
 				cachedPages.Remove(title);
 			}
-			scrollPositions.Remove(title);
+			if (title == "Lighting") { lightingTabs = null; keyboardTabBtn = null; rearTabBtn = null; keyboardCardRef = null; rearCardRef = null; }
+			if (title == "Settings") { settingsTabs = null; settingsTabPrimaryBtn = null; settingsTabSecondaryBtn = null; settingsPrefCard = null; settingsPowerCard = null; settingsKeysCard = null; updateCardRef = null; }
 		}
 
 		private void ClearCachedPages(bool disposing = false)
@@ -1459,7 +1552,8 @@ namespace GTBook
 			}
 			cachedPages.Clear();
             cardReflows.Clear();
-			scrollPositions.Clear();
+			lightingTabs = null; keyboardTabBtn = null; rearTabBtn = null; keyboardCardRef = null; rearCardRef = null;
+			settingsTabs = null; settingsTabPrimaryBtn = null; settingsTabSecondaryBtn = null; settingsPrefCard = null; settingsPowerCard = null; settingsKeysCard = null; updateCardRef = null;
 			if (disposing)
 			{
 				foreach (Control control in new Control[] { modeValue, cpuValue, batteryValue, coolingValue, details, extra, modeTile, cpuTile, batteryTile, gpuTile, cpuFanTile, gpuFanTile, memoryTile, diskTile, readingsPill, coolingPill, healthSyncPill, updateStatusPill, specView })
@@ -1471,10 +1565,10 @@ namespace GTBook
 
 		private void Overview()
 		{
-			SoftPanel softPanel = Card("Right now", "", 140);
+			SoftPanel softPanel = Card("Right now", "", 132);
 			Label rightNowTitle = softPanel.Controls.OfType<Label>().FirstOrDefault();
 			if (rightNowTitle != null) rightNowTitle.Width = Math.Max(S(80), softPanel.Width - S(250));
-			readingsPill.SetBounds(softPanel.Width - S(224), S(16), S(200), S(26));
+			readingsPill.SetBounds(softPanel.Width - S(224), S(12), S(200), S(24));
 			readingsPill.Anchor = AnchorStyles.Top | AnchorStyles.Left;
 			softPanel.Controls.Add(readingsPill);
 			readingsPill.BringToFront();
@@ -1482,8 +1576,8 @@ namespace GTBook
 
 			var rightNowGrid = new BufferedTableLayoutPanel
 			{
-				Location = new Point(S(22), S(56)),
-				Height = S(86),
+				Location = new Point(S(22), S(44)),
+				Height = S(78),
 				Width = softPanel.Width - S(44),
 				Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
 				ColumnCount = 3,
@@ -1504,29 +1598,29 @@ namespace GTBook
 			}
 			softPanel.Controls.Add(rightNowGrid);
 			RegisterCardReflow(softPanel, () => {
-				readingsPill.SetBounds(softPanel.Width - S(224), S(16), S(200), S(26));
+				readingsPill.SetBounds(softPanel.Width - S(224), S(12), S(200), S(24));
 				if (rightNowTitle != null && !rightNowTitle.IsDisposed) {
-					rightNowTitle.Location = new Point(S(22), S(16));
+					rightNowTitle.Location = new Point(S(22), S(12));
 					rightNowTitle.Width = Math.Max(S(80), readingsPill.Left - rightNowTitle.Left - S(8));
-					rightNowTitle.Height = MeasureLabelHeight(rightNowTitle, rightNowTitle.Width, S(34));
+					rightNowTitle.Height = MeasureLabelHeight(rightNowTitle, rightNowTitle.Width, S(28));
 				}
-				int gridTop = (rightNowTitle != null && !rightNowTitle.IsDisposed) ? Math.Max(S(54), Math.Max(rightNowTitle.Bottom, readingsPill.Bottom) + S(6)) : S(54);
+				int gridTop = (rightNowTitle != null && !rightNowTitle.IsDisposed) ? Math.Max(S(40), Math.Max(rightNowTitle.Bottom, readingsPill.Bottom) + S(2)) : S(40);
 				rightNowGrid.Location = new Point(S(22), gridTop);
 				rightNowGrid.Width = Math.Max(S(160), softPanel.Width - S(44));
-				rightNowGrid.Height = S(86);
-				softPanel.Height = rightNowGrid.Bottom + S(16);
+				rightNowGrid.Height = S(74);
+				softPanel.Height = rightNowGrid.Bottom + S(10);
 			});
 
-			SoftPanel softPanel2 = Card("Performance & cooling", "", 202);
-			Label perfSub = Label("Choose your pace. Hold Performance 1.5s for Turbo (Ultimate Performance · zero battery saving).", 9.5f);
-			perfSub.SetBounds(S(23), S(48), softPanel2.Width - S(46), S(22));
+			SoftPanel softPanel2 = Card("Performance & cooling", "", 176);
+			Label perfSub = Label("Choose your pace · Hold Performance 1.5s for Turbo (Ultimate · 0% battery saving).", 9.5f);
+			perfSub.SetBounds(S(23), S(42), softPanel2.Width - S(46), S(20));
 			perfSub.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 			softPanel2.Controls.Add(perfSub);
 
 			var modeGrid = new BufferedTableLayoutPanel
 			{
-				Location = new Point(S(22), S(74)),
-				Height = S(44),
+				Location = new Point(S(22), S(66)),
+				Height = S(40),
 				Width = softPanel2.Width - S(44),
 				Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
 				ColumnCount = 3,
@@ -1628,16 +1722,16 @@ namespace GTBook
 					Action = "auto"
 				}, null);
 			});
-			button2.SetBounds(S(22), S(125), S(206), S(36));
+			button2.SetBounds(S(22), S(112), S(200), S(34));
 			softPanel2.Controls.Add(button2);
-			coolingPill.SetBounds(S(238), S(130), S(260), S(26));
+			coolingPill.SetBounds(S(232), S(116), S(260), S(24));
 			softPanel2.Controls.Add(coolingPill);
 
 			overviewEnergySaver = new CheckBox
 			{
 				Text = "Turn on Windows Energy saver in Quiet mode (cool, quiet & best battery)",
 				Checked = autoEnergySaver,
-				Location = new Point(S(22), S(168)),
+				Location = new Point(S(22), S(152)),
 				Font = new Font("Segoe UI", 9.5f),
 				ForeColor = ink
 			};
@@ -1650,40 +1744,40 @@ namespace GTBook
 				int w = Math.Max(S(160), softPanel2.Width - S(44));
 				if (softPanel2.Controls.Count > 0 && softPanel2.Controls[0] is Label) {
 					Label t = (Label)softPanel2.Controls[0];
-					t.Location = new Point(S(22), S(16));
+					t.Location = new Point(S(22), S(12));
 					t.Width = w;
-					t.Height = MeasureLabelHeight(t, w, S(34));
+					t.Height = MeasureLabelHeight(t, w, S(28));
 				}
 				perfSub.Left = S(23);
 				perfSub.Width = Math.Max(S(160), softPanel2.Width - S(46));
-				perfSub.Top = softPanel2.Controls.Count > 0 ? Math.Max(S(50), softPanel2.Controls[0].Bottom + S(2)) : S(50);
-				perfSub.Height = MeasureLabelHeight(perfSub, perfSub.Width, S(22));
-				modeGrid.SetBounds(S(22), perfSub.Bottom + S(8), w, S(44));
-				int coolTop = modeGrid.Bottom + S(8);
-				int btnW = Math.Min(S(206), Math.Max(S(130), w / 2));
-				button2.SetBounds(S(22), coolTop, btnW, S(36));
-				coolingPill.SetBounds(button2.Right + S(10), coolTop + S(5), Math.Max(S(120), softPanel2.Width - button2.Right - S(32)), S(26));
+				perfSub.Top = softPanel2.Controls.Count > 0 ? (softPanel2.Controls[0].Bottom + S(2)) : S(42);
+				perfSub.Height = MeasureLabelHeight(perfSub, perfSub.Width, S(20));
+				modeGrid.SetBounds(S(22), perfSub.Bottom + S(5), w, S(38));
+				int coolTop = modeGrid.Bottom + S(5);
+				int btnW = Math.Min(S(200), Math.Max(S(130), w / 2));
+				button2.SetBounds(S(22), coolTop, btnW, S(32));
+				coolingPill.SetBounds(button2.Right + S(10), coolTop + S(4), Math.Max(S(120), softPanel2.Width - button2.Right - S(32)), S(24));
 				ConfigureWrappingCheckBox(overviewEnergySaver, softPanel2.Width);
-				overviewEnergySaver.Location = new Point(S(22), button2.Bottom + S(10));
-				softPanel2.Height = Math.Max(S(202), overviewEnergySaver.Bottom + S(14));
+				overviewEnergySaver.Location = new Point(S(22), button2.Bottom + S(5));
+				softPanel2.Height = Math.Max(S(154), overviewEnergySaver.Bottom + S(8));
 			});
 
-			SoftPanel softPanel3 = Card("System health", "", 242);
+			SoftPanel softPanel3 = Card("System health", "", 218);
 			Label healthTitle = softPanel3.Controls.OfType<Label>().FirstOrDefault();
 			if (healthTitle != null) healthTitle.Width = Math.Max(S(80), softPanel3.Width - S(230));
-			healthSyncPill.SetBounds(softPanel3.Width - S(204), S(16), S(180), S(26));
+			healthSyncPill.SetBounds(softPanel3.Width - S(204), S(12), S(180), S(24));
 			healthSyncPill.Anchor = AnchorStyles.Top | AnchorStyles.Left;
 			softPanel3.Controls.Add(healthSyncPill);
 			healthSyncPill.BringToFront();
 			Label healthSub = Label("Temperatures, fans, memory and storage · updates automatically", 9.5f);
-			healthSub.SetBounds(S(23), S(50), softPanel3.Width - S(46), S(22));
+			healthSub.SetBounds(S(23), S(42), softPanel3.Width - S(46), S(20));
 			healthSub.Anchor = AnchorStyles.Top | AnchorStyles.Left;
 			softPanel3.Controls.Add(healthSub);
 
 			var healthTopGrid = new BufferedTableLayoutPanel
 			{
-				Location = new Point(S(22), S(74)),
-				Height = S(72),
+				Location = new Point(S(22), S(66)),
+				Height = S(66),
 				Width = softPanel3.Width - S(44),
 				Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
 				ColumnCount = 3,
@@ -1706,8 +1800,8 @@ namespace GTBook
 
 			var healthBottomGrid = new BufferedTableLayoutPanel
 			{
-				Location = new Point(S(22), S(152)),
-				Height = S(84),
+				Location = new Point(S(22), S(138)),
+				Height = S(76),
 				Width = softPanel3.Width - S(44),
 				Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
 				ColumnCount = 2,
@@ -1728,26 +1822,26 @@ namespace GTBook
 			}
 			softPanel3.Controls.Add(healthBottomGrid);
 			RegisterCardReflow(softPanel3, () => {
-				healthSyncPill.SetBounds(softPanel3.Width - S(204), S(16), S(180), S(26));
+				healthSyncPill.SetBounds(softPanel3.Width - S(204), S(12), S(180), S(24));
 				if (healthTitle != null && !healthTitle.IsDisposed) {
-					healthTitle.Location = new Point(S(22), S(16));
+					healthTitle.Location = new Point(S(22), S(12));
 					healthTitle.Width = Math.Max(S(80), healthSyncPill.Left - healthTitle.Left - S(8));
-					healthTitle.Height = MeasureLabelHeight(healthTitle, healthTitle.Width, S(34));
+					healthTitle.Height = MeasureLabelHeight(healthTitle, healthTitle.Width, S(28));
 				}
 				int w = Math.Max(S(160), softPanel3.Width - S(44));
 				healthSub.Left = S(23);
 				healthSub.Width = Math.Max(S(160), softPanel3.Width - S(46));
-				healthSub.Top = (healthTitle != null && !healthTitle.IsDisposed) ? Math.Max(S(50), Math.Max(healthTitle.Bottom, healthSyncPill.Bottom) + S(2)) : S(50);
-				healthSub.Height = MeasureLabelHeight(healthSub, healthSub.Width, S(22));
-				healthTopGrid.SetBounds(S(22), healthSub.Bottom + S(8), w, S(72));
-				healthBottomGrid.SetBounds(S(22), healthTopGrid.Bottom + S(6), w, S(84));
-				softPanel3.Height = healthBottomGrid.Bottom + S(14);
+				healthSub.Top = (healthTitle != null && !healthTitle.IsDisposed) ? Math.Max(S(40), Math.Max(healthTitle.Bottom, healthSyncPill.Bottom) + S(2)) : S(40);
+				healthSub.Height = MeasureLabelHeight(healthSub, healthSub.Width, S(20));
+				healthTopGrid.SetBounds(S(22), healthSub.Bottom + S(5), w, S(62));
+				healthBottomGrid.SetBounds(S(22), healthTopGrid.Bottom + S(5), w, S(72));
+				softPanel3.Height = healthBottomGrid.Bottom + S(10);
 			});
 		}
 
 		private ComboBox Effect(Panel parent, string[] items, string selected, int y)
 		{
-			ComboBox comboBox = new ComboBox();
+			ComboBox comboBox = new WheelSafeComboBox();
 			comboBox.DropDownStyle = ComboBoxStyle.DropDownList;
 			comboBox.Location = new Point(S(22), y);
 			comboBox.Width = S(174);
@@ -1879,13 +1973,22 @@ namespace GTBook
 
 		private void Lighting()
 		{
+			lightingTabs = new BufferedPanel { Height = S(36), BackColor = Color.Transparent };
+			keyboardTabBtn = (RaisedButton)Button("Keyboard zone", delegate { lightingShowRear = false; FitCards(); SetPreviewAnimation(page, Visible && !resizingWindow); });
+			rearTabBtn = (RaisedButton)Button("Rear light bar", delegate { lightingShowRear = true; FitCards(); SetPreviewAnimation(page, Visible && !resizingWindow); });
+			keyboardTabBtn.Navigation = false; rearTabBtn.Navigation = false;
+			lightingTabs.Controls.Add(keyboardTabBtn);
+			lightingTabs.Controls.Add(rearTabBtn);
+			page.Controls.Add(lightingTabs);
+
 			SoftPanel softPanel = Card("A glow for your keyboard", "Preview your colours and effect below. Nothing changes until Apply.", 526);
+			keyboardCardRef = softPanel;
 			Label keyboardHint = softPanel.Controls.OfType<Label>().Last();
 			var tableLayoutPanel2 = new BufferedTableLayoutPanel
 			{
 				Location = new Point(S(22), S(96)),
 				Width = softPanel.Width - S(44),
-				Height = S(116),
+				Height = S(104),
 				ColumnCount = 2,
 				RowCount = 1,
 				Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
@@ -1915,7 +2018,7 @@ namespace GTBook
                 kbEffect.Focus();kbEffect.DroppedDown=true;
 			});
 			officialTab.Dock = DockStyle.Top;
-			officialTab.Height = S(34);officialTab.Dropdown=true;
+			officialTab.Height = S(32);officialTab.Dropdown=true;
 			panel2.Controls.Add(officialTab);
 			RaisedButton extraTab = (RaisedButton)Button("Extra · " + ExtraEffects.Names.Length + " animations", delegate
 			{
@@ -1924,24 +2027,24 @@ namespace GTBook
                 kbExtraEffect.Focus();kbExtraEffect.DroppedDown=true;
 			});
 			extraTab.Dock = DockStyle.Top;
-			extraTab.Height = S(34);extraTab.Dropdown=true;
+			extraTab.Height = S(32);extraTab.Dropdown=true;
 			panel4.Controls.Add(extraTab);
-			kbEffect = Effect(panel2, new string[7] { "Static", "Breathing", "Wave", "Clock", "Rainbow", "Flow", "Four zones" }, keyboard.Effect, S(46));
+			kbEffect = Effect(panel2, new string[7] { "Static", "Breathing", "Wave", "Clock", "Rainbow", "Flow", "Four zones" }, keyboard.Effect, S(40));
 			kbEffect.Width = panel2.Width - S(24);
 			kbEffect.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 			kbEffect.Left = S(12);
-			kbExtraEffect = Effect(panel4, ExtraEffects.Names, keyboard.Effect, S(46));
+			kbExtraEffect = Effect(panel4, ExtraEffects.Names, keyboard.Effect, S(40));
 			kbExtraEffect.Width = panel4.Width - S(24);
 			kbExtraEffect.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 			kbExtraEffect.Left = S(12);
-			var officialHint=Label("Built-in controller effects",8f);officialHint.SetBounds(S(12),S(84),panel2.Width-S(24),S(24));officialHint.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;panel2.Controls.Add(officialHint);
-            var extraHint=Label("App animations · four zones",8f);extraHint.SetBounds(S(12),S(84),panel4.Width-S(24),S(24));extraHint.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;panel4.Controls.Add(extraHint);
+			var officialHint=Label("Built-in controller effects",8f);officialHint.SetBounds(S(12),S(76),panel2.Width-S(24),S(20));officialHint.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;panel2.Controls.Add(officialHint);
+            var extraHint=Label("App animations · four zones",8f);extraHint.SetBounds(S(12),S(76),panel4.Width-S(24),S(20));extraHint.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;panel4.Controls.Add(extraHint);
             zoneButtons = new Button[4];
 			var tableLayoutPanel4 = new BufferedTableLayoutPanel
 			{
-				Location = new Point(S(22), S(224)),
+				Location = new Point(S(22), S(214)),
 				Width = softPanel.Width - S(44),
-				Height = S(42),
+				Height = S(38),
 				ColumnCount = 4,
 				RowCount = 1,
 				Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
@@ -1964,16 +2067,16 @@ namespace GTBook
 				zoneButtons[i].Margin = new Padding(0, 0, (i != 3) ? S(8) : 0, 0);
 			}
 			int kbBrightCaptionIdx = softPanel.Controls.Count;
-			kbBright = Slider(softPanel, keyboard.Brightness, S(22), S(276), 100, "Brightness");
+			kbBright = Slider(softPanel, keyboard.Brightness, S(22), S(262), 100, "Brightness");
 			Label kbBrightCaption = (Label)softPanel.Controls[kbBrightCaptionIdx];
 			kbBright.ValueChanged += delegate
 			{
 				keyboard.Brightness = kbBright.Value;
 			};
 			Label zoneLabel = Label("Zone effect", 9f);
-			zoneLabel.SetBounds(S(320), S(276), S(200), S(24));
+			zoneLabel.SetBounds(S(320), S(262), S(200), S(22));
 			softPanel.Controls.Add(zoneLabel);
-			ComboBox zones = Effect(softPanel, new string[4] { "Static", "Breathing", "Clock", "Rainbow" }, keyboard.ZoneEffect, S(300));
+			ComboBox zones = Effect(softPanel, new string[4] { "Static", "Breathing", "Clock", "Rainbow" }, keyboard.ZoneEffect, S(286));
 			zones.Left = S(320);
 			zones.SelectedIndexChanged += delegate
 			{
@@ -1981,9 +2084,9 @@ namespace GTBook
 			};
 			var speedPanel = new BufferedPanel
 			{
-				Location = new Point(S(310), S(276)),
+				Location = new Point(S(310), S(262)),
 				Width = S(245),
-				Height = S(65),
+				Height = S(58),
 				BackColor = Theme.White
 			};
 			softPanel.Controls.Add(speedPanel);
@@ -1992,14 +2095,14 @@ namespace GTBook
 			{
 				keyboard.Speed = animationSpeed.Value;
 			};
-            var direction=Effect(softPanel,new[]{"Left → Right","Right → Left"},keyboard.Direction==1?"Right → Left":"Left → Right",S(348));
+            var direction=Effect(softPanel,new[]{"Left → Right","Right → Left"},keyboard.Direction==1?"Right → Left":"Left → Right",S(324));
             direction.AccessibleName="Animation direction";direction.Left=S(320);
             direction.SelectedIndexChanged+=(s,e)=>{keyboard.Direction=direction.SelectedIndex;};
 			CheckBox awake = new CheckBox
 			{
 				Text = "Keep keyboard awake",
 				Checked = keyboard.KeepAwake,
-				Location = new Point(S(22), S(356))
+				Location = new Point(S(22), S(334))
 			};
 			ConfigureWrappingCheckBox(awake, softPanel.Width);
 			awake.CheckedChanged += delegate
@@ -2015,8 +2118,8 @@ namespace GTBook
 			});
             applyKeyboardButton=(RaisedButton)button;
             applyKeyboardButton.Accent=Color.FromArgb(244,117,20);
-            applyKeyboardButton.Font=new Font("Segoe UI",11,FontStyle.Bold);
-            var keyboardActions=new BufferedPanel{Location=new Point(S(22),S(396)),Size=new Size(softPanel.Width-S(44),S(62)),Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right,BackColor=Color.Transparent};
+            applyKeyboardButton.Font=new Font("Segoe UI",10.5f,FontStyle.Bold);
+            var keyboardActions=new BufferedPanel{Location=new Point(S(22),S(366)),Size=new Size(softPanel.Width-S(44),S(48)),Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right,BackColor=Color.Transparent};
 			softPanel.Controls.Add(keyboardActions);
 			stopKeyboardButton = Button("Stop animation", async delegate
 			{
@@ -2027,13 +2130,13 @@ namespace GTBook
                 if(stopped){((RaisedButton)stopKeyboardButton).Flash(lastKeyboardStopOk);shortcutToast.Notify(new FeedbackNotice{Kind=lastKeyboardStopOk?FeedbackKind.Message:FeedbackKind.Error,Title=lastKeyboardStopOk?"Animation paused":"Animation stopped with an error",Detail=lastKeyboardStopOk?"Last colour held. Your keyboard stays lit.":keyboardResult});}
 			});
             ((RaisedButton)stopKeyboardButton).Accent=Color.FromArgb(226,79,70);
-            stopKeyboardButton.Font=new Font("Segoe UI",11,FontStyle.Bold);
+            stopKeyboardButton.Font=new Font("Segoe UI",10.5f,FontStyle.Bold);
 			stopKeyboardButton.Enabled = keyboardTask != null;
             keyboardActions.Controls.Add(button);keyboardActions.Controls.Add(stopKeyboardButton);
-            Action arrangeActions=()=>{int gap=S(16),w=Math.Min(S(242),Math.Max(S(90),(keyboardActions.ClientSize.Width-gap)/2)),left=(keyboardActions.ClientSize.Width-2*w-gap)/2;button.SetBounds(left,0,w,S(62));stopKeyboardButton.SetBounds(left+w+gap,0,w,S(62));};
+            Action arrangeActions=()=>{int gap=S(14),w=Math.Min(S(242),Math.Max(S(90),(keyboardActions.ClientSize.Width-gap)/2)),left=(keyboardActions.ClientSize.Width-2*w-gap)/2;button.SetBounds(left,0,w,S(48));stopKeyboardButton.SetBounds(left+w+gap,0,w,S(48));};
             keyboardActions.Resize+=(s,e)=>arrangeActions();arrangeActions();
 			kbOutcome = Label(keyboardResult, 9f);
-			kbOutcome.SetBounds(S(22), S(476), softPanel.Width - S(44), S(38));
+			kbOutcome.SetBounds(S(22), S(422), softPanel.Width - S(44), S(28));
 			kbOutcome.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 			softPanel.Controls.Add(kbOutcome);
 			LivePreview previewWidget = AttachLightingPreview(softPanel, () => Copy(keyboard, "keyboard"), "keyboard");
@@ -2043,60 +2146,62 @@ namespace GTBook
 				layingOutKeyboard = true;
 				try {
 					float s = softPanel.DeviceDpi > 0 ? softPanel.DeviceDpi / 96f : DpiScale;
-					int padX = S(22);
+					int padX = S(20);
 					int innerW = Math.Max(S(200), softPanel.Width - 2 * padX);
 					if (softPanel.Controls.Count > 0 && softPanel.Controls[0] is Label) {
 						Label t = (Label)softPanel.Controls[0];
+						t.Location = new Point(padX, S(12));
 						t.Width = innerW;
-						t.Height = MeasureLabelHeight(t, innerW, S(34));
+						t.Height = MeasureLabelHeight(t, innerW, S(28));
 						keyboardHint.Top = t.Bottom + S(2);
 					}
+					keyboardHint.Left = padX;
 					keyboardHint.Width = innerW;
-					keyboardHint.Height = MeasureLabelHeight(keyboardHint, innerW, S(24));
-					previewWidget.SetBounds(padX, keyboardHint.Bottom + S(10), innerW, S(148));
-					int effTop = previewWidget.Bottom + S(14);
+					keyboardHint.Height = MeasureLabelHeight(keyboardHint, innerW, S(20));
+					previewWidget.SetBounds(padX, keyboardHint.Bottom + S(6), innerW, S(112));
+					int effTop = previewWidget.Bottom + S(8);
 					tableLayoutPanel2.Width = innerW;
 					int halfEffW = Math.Max(S(80), (innerW - S(16)) / 2 - S(24));
-					officialHint.Top = kbEffect.Bottom + S(6);
+					officialHint.Top = kbEffect.Bottom + S(4);
 					officialHint.Width = halfEffW;
-					officialHint.Height = MeasureLabelHeight(officialHint, halfEffW, S(20));
-					extraHint.Top = kbExtraEffect.Bottom + S(6);
+					officialHint.Height = MeasureLabelHeight(officialHint, halfEffW, S(18));
+					extraHint.Top = kbExtraEffect.Bottom + S(4);
 					extraHint.Width = halfEffW;
-					extraHint.Height = MeasureLabelHeight(extraHint, halfEffW, S(20));
-					int effH = Math.Max(S(116), Math.Max(officialHint.Bottom, extraHint.Bottom) + S(8));
+					extraHint.Height = MeasureLabelHeight(extraHint, halfEffW, S(18));
+					int effH = Math.Max(S(102), Math.Max(officialHint.Bottom, extraHint.Bottom) + S(6));
 					tableLayoutPanel2.SetBounds(padX, effTop, innerW, effH);
-					tableLayoutPanel4.SetBounds(padX, tableLayoutPanel2.Bottom + S(12), innerW, S(42));
-					int sliderTop = tableLayoutPanel4.Bottom + S(12);
-					int left = softPanel.ClientSize.Width / 2 + (int)(12 * s);
-					int leftTrackW = Math.Max(S(90), softPanel.ClientSize.Width / 2 - (int)(34 * s));
-					kbBrightCaption.SetBounds(padX, sliderTop, leftTrackW, S(24));
-					kbBright.SetBounds(padX - S(4), sliderTop + S(24), leftTrackW, S(38));
+					tableLayoutPanel4.SetBounds(padX, tableLayoutPanel2.Bottom + S(8), innerW, S(38));
+					int sliderTop = tableLayoutPanel4.Bottom + S(8);
+					int left = softPanel.ClientSize.Width / 2 + (int)(10 * s);
+					int leftTrackW = Math.Max(S(90), softPanel.ClientSize.Width / 2 - padX - (int)(10 * s));
+					kbBrightCaption.SetBounds(padX, sliderTop, leftTrackW, S(22));
+					kbBright.SetBounds(padX - S(4), sliderTop + S(22), leftTrackW, S(34));
 					speedPanel.Left = left;
 					speedPanel.Top = sliderTop;
 					speedPanel.Width = Math.Max(S(90), softPanel.ClientSize.Width - left - padX);
 					foreach (Label speedCaption in speedPanel.Controls.OfType<Label>()) {
 						speedCaption.Location = new Point(S(4), 0);
 						speedCaption.Width = Math.Max(S(60), speedPanel.ClientSize.Width - speedCaption.Left);
-						speedCaption.Height = S(24);
+						speedCaption.Height = S(22);
 					}
-					animationSpeed.Location = new Point(0, S(24));
+					animationSpeed.Location = new Point(0, S(22));
 					animationSpeed.Width = speedPanel.ClientSize.Width;
-					speedPanel.Height = Math.Max(S(64), animationSpeed.Bottom + S(2));
-					zoneLabel.SetBounds(left, sliderTop, speedPanel.Width, S(24));
-					zones.Location = new Point(left, sliderTop + S(24));
+					speedPanel.Height = Math.Max(S(56), animationSpeed.Bottom + S(2));
+					zoneLabel.SetBounds(left, sliderTop, speedPanel.Width, S(22));
+					zones.Location = new Point(left, sliderTop + S(22));
 					zones.Width = Math.Min((int)(230 * s), speedPanel.Width);
-					direction.Location = new Point(left, speedPanel.Bottom + S(4));
+					direction.Location = new Point(left, speedPanel.Bottom + S(2));
 					direction.Width = speedPanel.Width;
 					int rightColBottom = speedPanel.Visible ? direction.Bottom : (zones.Visible ? zones.Bottom : kbBright.Bottom);
-					int afterSliderTop = Math.Max(kbBright.Bottom, rightColBottom) + S(6);
-					ConfigureWrappingCheckBox(awake, softPanel.Width);
+					int afterSliderTop = Math.Max(kbBright.Bottom, rightColBottom) + S(4);
+					ConfigureWrappingCheckBox(awake, softPanel.Width, 20);
 					awake.Location = new Point(padX, afterSliderTop);
-					keyboardActions.SetBounds(padX, awake.Bottom + S(12), innerW, S(62));
+					keyboardActions.SetBounds(padX, awake.Bottom + S(8), innerW, S(48));
 					arrangeActions();
 					kbOutcome.Width = innerW;
-					kbOutcome.Location = new Point(padX, keyboardActions.Bottom + S(12));
-					kbOutcome.Height = MeasureLabelHeight(kbOutcome, innerW, S(24));
-					softPanel.Height = kbOutcome.Bottom + S(14);
+					kbOutcome.Location = new Point(padX, keyboardActions.Bottom + S(6));
+					kbOutcome.Height = MeasureLabelHeight(kbOutcome, innerW, S(20));
+					softPanel.Height = kbOutcome.Bottom + S(10);
 				} finally {
 					layingOutKeyboard = false;
 				}
@@ -2119,7 +2224,7 @@ namespace GTBook
 				ComboBox comboBox = zones;
 				bool visible = (zoneLabel.Visible = !flag && keyboard.Effect == "Four zones");
 				comboBox.Visible = visible;
-				keyboardHint.Text = (flag ? (ExtraEffects.Description(keyboard.Effect) + " Four-zone animation · keep Essentials open.") : "Official controller effects · vivid colours. Preview first, then Apply.");
+				keyboardHint.Text = (flag ? (ExtraEffects.Description(keyboard.Effect) + " Four-zone animation · keep Essentials open.") : "Official controller effects · brightness 0% turns off.");
 				for (int j = 0; j < 4; j++)
 				{
 					zoneButtons[j].Visible = !flag || j < 2;
@@ -2151,86 +2256,88 @@ namespace GTBook
 			kbExtraEffect.SelectionChangeCommitted += delegate { applyExtraChoice(); };
 			keyboardChoiceChanged();
             BuildRearCard();
-			SoftPanel softPanel3 = Card("Keep it simple", "Successful lighting changes are remembered. Running Extra animations can resume after sign-in.\nSet brightness to zero to turn the keyboard off.", 115);
 		}
 
         private void BuildRearCard(){
-            var card=Card("Rear light bar","Choose a look, preview it, then apply it to your device.",652);
+            var card=Card("Rear light bar","Choose a look, preview it, then apply it to your device.",520);
+            rearCardRef=card;
             Label cardDesc=card.Controls.OfType<Label>().Last();
             rearIllustration=new LivePreview{Target="rear",Selection=()=>rearState.Illustration(rear),Caption=()=>rearState.Caption(rear),Badge=()=>rearState.Badge};
-            rearIllustration.SetBounds(S(22),S(90),card.Width-S(44),S(140));rearIllustration.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;card.Controls.Add(rearIllustration);
-            rearEditor=new BufferedPanel{Location=new Point(S(22),S(246)),Size=new Size(card.Width-S(44),S(184)),Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right,BackColor=Color.Transparent};card.Controls.Add(rearEditor);
+            rearIllustration.SetBounds(S(20),S(68),card.Width-S(40),S(110));rearIllustration.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;card.Controls.Add(rearIllustration);
+            rearEditor=new BufferedPanel{Location=new Point(S(20),S(186)),Size=new Size(card.Width-S(40),S(168)),Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right,BackColor=Color.Transparent};card.Controls.Add(rearEditor);
             var effectLabel=Label("Effect",9,true);var firstLabel=Label("Colour 1",9,true);var secondLabel=Label("Colour 2",9,true);
             rearEditor.Controls.Add(effectLabel);rearEditor.Controls.Add(firstLabel);rearEditor.Controls.Add(secondLabel);
-            rearEffect=Effect(rearEditor,RearLighting.Names,rear.Effect,S(26));rearEffect.AccessibleName="Rear light effect";
-            rearColor=ColorButton(rearEditor,rear.Colors[0],"Colour 1",0,S(26),hex=>{rear.Colors[0]=hex;RearEdited();});
-            rearSecondColor=ColorButton(rearEditor,rear.Colors[1],"Colour 2",0,S(26),hex=>{rear.Colors[1]=hex;RearEdited();});
-            rearEffectHint=Label(RearLighting.Description(rear.Effect),9);rearEffectHint.SetBounds(0,S(76),rearEditor.Width,S(34));rearEffectHint.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;rearEditor.Controls.Add(rearEffectHint);
-            var brightnessPanel=new BufferedPanel{Location=new Point(0,S(116)),Size=new Size(S(250),S(68)),BackColor=Theme.White};var speedPanel=new BufferedPanel{Location=new Point(S(280),S(116)),Size=new Size(S(250),S(68)),BackColor=Theme.White};
+            rearEffect=Effect(rearEditor,RearLighting.Names,rear.Effect,S(22));rearEffect.AccessibleName="Rear light effect";
+            rearColor=ColorButton(rearEditor,rear.Colors[0],"Colour 1",0,S(22),hex=>{rear.Colors[0]=hex;RearEdited();});
+            rearSecondColor=ColorButton(rearEditor,rear.Colors[1],"Colour 2",0,S(22),hex=>{rear.Colors[1]=hex;RearEdited();});
+            rearEffectHint=Label(RearLighting.Description(rear.Effect),9);rearEffectHint.SetBounds(0,S(66),rearEditor.Width,S(28));rearEffectHint.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;rearEditor.Controls.Add(rearEffectHint);
+            var brightnessPanel=new BufferedPanel{Location=new Point(0,S(98)),Size=new Size(S(250),S(58)),BackColor=Theme.White};var speedPanel=new BufferedPanel{Location=new Point(S(280),S(98)),Size=new Size(S(250),S(58)),BackColor=Theme.White};
             rearEditor.Controls.Add(brightnessPanel);rearEditor.Controls.Add(speedPanel);
             rearBright=Slider(brightnessPanel,rear.Brightness,S(4),0,100,"Brightness");rearSpeed=Slider(speedPanel,rear.Speed,S(4),0,9,"Breathing speed");
             rearEffect.SelectedIndexChanged+=(s,e)=>{rear.Effect=rearEffect.Text;RearEdited();};
             rearBright.ValueChanged+=(s,e)=>{rear.Brightness=rearBright.Value;RearEdited();};rearSpeed.ValueChanged+=(s,e)=>{rear.Speed=rearSpeed.Value;RearEdited();};
-            rearDraftToggle=new CheckBox{Text="Preview selected look · device stays unchanged",Checked=rearState.PreviewDraft,Location=new Point(S(22),S(440))};
-            ConfigureWrappingCheckBox(rearDraftToggle,card.Width);
+            rearDraftToggle=new CheckBox{Text="Preview selected look · device stays unchanged",Checked=rearState.PreviewDraft,Location=new Point(S(20),S(362))};
+            ConfigureWrappingCheckBox(rearDraftToggle,card.Width,20);
             rearDraftToggle.CheckedChanged+=(s,e)=>{rearState.PreviewDraft=rearDraftToggle.Checked;UpdateRearIndicator();};card.Controls.Add(rearDraftToggle);
-            var actions=new BufferedPanel{Location=new Point(S(22),S(482)),Size=new Size(card.Width-S(44),S(58)),Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right,BackColor=Color.Transparent};card.Controls.Add(actions);
+            var actions=new BufferedPanel{Location=new Point(S(20),S(392)),Size=new Size(card.Width-S(40),S(50)),Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right,BackColor=Color.Transparent};card.Controls.Add(actions);
             rearApplyButton=(RaisedButton)Button("Apply to bar",async()=>await RearAction(ApplyRear));rearApplyButton.Accent=Theme.OrangeEnd;rearApplyButton.Primary=true;
             rearOffButton=(RaisedButton)Button("Turn off",async()=>await RearAction(async()=>await Run(new Request{Action="rear-off"},null)));rearOffButton.Accent=Color.FromArgb(226,79,70);
             rearStopMusicButton=(RaisedButton)Button("Stop music",async()=>await RearAction(async()=>{await StopMusic();status.Text=rearResult;}));
             foreach(var button in new[]{rearApplyButton,rearOffButton,rearStopMusicButton}){button.Font=new Font("Segoe UI",10f,FontStyle.Bold);actions.Controls.Add(button);}
-            rearOutcome=Label(rearState.Caption(rear),9.5f,true);rearOutcome.SetBounds(S(22),S(552),card.Width-S(44),S(40));rearOutcome.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;card.Controls.Add(rearOutcome);
-            var note=Label("Simulated preview · music follows playback.",8.5f);note.SetBounds(S(22),S(604),card.Width-S(222),S(34));note.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;card.Controls.Add(note);
-            var check=Button("Check status",async()=>await RearAction(async()=>await Run(new Request{Action="refresh"},null)));check.SetBounds(card.Width-S(178),S(598),S(156),S(40));check.Anchor=AnchorStyles.Top|AnchorStyles.Right;card.Controls.Add(check);
+            rearOutcome=Label(rearState.Caption(rear),9.5f,true);rearOutcome.SetBounds(S(20),S(450),card.Width-S(40),S(26));rearOutcome.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;card.Controls.Add(rearOutcome);
+            var note=Label("Simulated preview · music follows playback.",8.5f);note.SetBounds(S(20),S(486),card.Width-S(210),S(26));note.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;card.Controls.Add(note);
+            var check=Button("Check status",async()=>await RearAction(async()=>await Run(new Request{Action="refresh"},null)));check.SetBounds(card.Width-S(176),S(480),S(156),S(36));check.Anchor=AnchorStyles.Top|AnchorStyles.Right;card.Controls.Add(check);
             bool layingOutRear=false;
             Action layout=()=>{
                 if(layingOutRear||card.IsDisposed)return;
                 layingOutRear=true;
                 try{
                     float s=card.DeviceDpi>0?card.DeviceDpi/96f:DpiScale;
-                    int padX=S(22),innerW=Math.Max(S(200),card.Width-2*padX);
+                    int padX=S(20),innerW=Math.Max(S(200),card.Width-2*padX);
                     if(card.Controls.Count>0&&card.Controls[0] is Label){
                         Label t=(Label)card.Controls[0];
+                        t.Location=new Point(padX,S(12));
                         t.Width=innerW;
-                        t.Height=MeasureLabelHeight(t,innerW,S(34));
+                        t.Height=MeasureLabelHeight(t,innerW,S(28));
                         cardDesc.Top=t.Bottom+S(2);
                     }
+                    cardDesc.Left=padX;
                     cardDesc.Width=innerW;
-                    cardDesc.Height=MeasureLabelHeight(cardDesc,innerW,S(22));
-                    rearIllustration.SetBounds(padX,cardDesc.Bottom+S(10),innerW,S(140));
-                    rearEditor.Location=new Point(padX,rearIllustration.Bottom+S(14));
+                    cardDesc.Height=MeasureLabelHeight(cardDesc,innerW,S(20));
+                    rearIllustration.SetBounds(padX,cardDesc.Bottom+S(6),innerW,S(110));
+                    rearEditor.Location=new Point(padX,rearIllustration.Bottom+S(8));
                     rearEditor.Width=innerW;
-                    int gap=(int)(12*s),width=rearEditor.ClientSize.Width,col=Math.Max(S(60),(width-2*gap)/3);
-                    effectLabel.SetBounds(0,0,col,(int)(22*s));firstLabel.SetBounds(col+gap,0,col,(int)(22*s));secondLabel.SetBounds(2*(col+gap),0,col,(int)(22*s));
-                    rearEffect.SetBounds(0,(int)(26*s),col,(int)(40*s));rearColor.SetBounds(col+gap,(int)(26*s),col,(int)(44*s));rearSecondColor.SetBounds(2*(col+gap),(int)(26*s),col,(int)(44*s));
+                    int gap=(int)(10*s),width=rearEditor.ClientSize.Width,col=Math.Max(S(60),(width-2*gap)/3);
+                    effectLabel.SetBounds(0,0,col,(int)(20*s));firstLabel.SetBounds(col+gap,0,col,(int)(20*s));secondLabel.SetBounds(2*(col+gap),0,col,(int)(20*s));
+                    rearEffect.SetBounds(0,(int)(22*s),col,(int)(36*s));rearColor.SetBounds(col+gap,(int)(22*s),col,(int)(38*s));rearSecondColor.SetBounds(2*(col+gap),(int)(22*s),col,(int)(38*s));
                     int rowBottom=Math.Max(rearEffect.Bottom,rearColor.Bottom);
-                    rearEffectHint.Location=new Point(0,rowBottom+S(6));
+                    rearEffectHint.Location=new Point(0,rowBottom+S(4));
                     rearEffectHint.Width=width;
-                    rearEffectHint.Height=MeasureLabelHeight(rearEffectHint,width,S(26));
+                    rearEffectHint.Height=MeasureLabelHeight(rearEffectHint,width,S(22));
                     int half=Math.Max(S(80),(width-gap)/2);
-                    int sliderRowTop=rearEffectHint.Bottom+S(6);
-                    rearBright.Location=new Point(0,S(24));rearBright.Width=half;
-                    rearSpeed.Location=new Point(0,S(24));rearSpeed.Width=half;
-                    int sliderH=Math.Max(S(64),Math.Max(rearBright.Bottom,rearSpeed.Bottom)+S(2));
+                    int sliderRowTop=rearEffectHint.Bottom+S(4);
+                    rearBright.Location=new Point(0,S(22));rearBright.Width=half;
+                    rearSpeed.Location=new Point(0,S(22));rearSpeed.Width=half;
+                    int sliderH=Math.Max(S(56),Math.Max(rearBright.Bottom,rearSpeed.Bottom)+S(2));
                     brightnessPanel.SetBounds(0,sliderRowTop,half,sliderH);
                     speedPanel.SetBounds(half+gap,sliderRowTop,half,sliderH);
-                    foreach(var pPanel in new[]{brightnessPanel,speedPanel})foreach(Label label in pPanel.Controls.OfType<Label>()){label.Location=new Point(S(4),0);label.Width=Math.Max(S(40),pPanel.Width-label.Left);label.Height=S(24);}
+                    foreach(var pPanel in new[]{brightnessPanel,speedPanel})foreach(Label label in pPanel.Controls.OfType<Label>()){label.Location=new Point(S(4),0);label.Width=Math.Max(S(40),pPanel.Width-label.Left);label.Height=S(22);}
                     rearEditor.Height=brightnessPanel.Bottom+S(2);
-                    ConfigureWrappingCheckBox(rearDraftToggle,card.Width);
-                    rearDraftToggle.Location=new Point(padX,rearEditor.Bottom+S(8));
-                    actions.SetBounds(padX,rearDraftToggle.Bottom+S(10),innerW,S(56));
+                    ConfigureWrappingCheckBox(rearDraftToggle,card.Width,20);
+                    rearDraftToggle.Location=new Point(padX,rearEditor.Bottom+S(6));
+                    actions.SetBounds(padX,rearDraftToggle.Bottom+S(6),innerW,S(50));
                     int actionWidth=actions.ClientSize.Width,small=Math.Max(S(64),(actionWidth-2*gap)/4),primary=actionWidth-2*small-2*gap;
                     rearApplyButton.SetBounds(0,0,primary,actions.Height);rearOffButton.SetBounds(primary+gap,0,small,actions.Height);rearStopMusicButton.SetBounds(primary+small+2*gap,0,small,actions.Height);
-                    rearOutcome.Location=new Point(padX,actions.Bottom+S(10));
+                    rearOutcome.Location=new Point(padX,actions.Bottom+S(6));
                     rearOutcome.Width=innerW;
-                    rearOutcome.Height=MeasureLabelHeight(rearOutcome,innerW,S(26));
-                    int footerTop=rearOutcome.Bottom+S(10);
-                    int checkW=S(156),checkH=S(40);
+                    rearOutcome.Height=MeasureLabelHeight(rearOutcome,innerW,S(22));
+                    int footerTop=rearOutcome.Bottom+S(6);
+                    int checkW=S(156),checkH=S(36);
                     check.SetBounds(card.Width-padX-checkW,footerTop,checkW,checkH);
                     note.Location=new Point(padX,footerTop+S(4));
                     note.Width=Math.Max(S(80),check.Left-padX-S(12));
-                    note.Height=MeasureLabelHeight(note,note.Width,S(26));
-                    card.Height=Math.Max(S(640),Math.Max(check.Bottom,note.Bottom)+S(14));
+                    note.Height=MeasureLabelHeight(note,note.Width,S(22));
+                    card.Height=Math.Max(check.Bottom,note.Bottom)+S(10);
                 }finally{
                     layingOutRear=false;
                 }
@@ -2257,329 +2364,204 @@ namespace GTBook
 
 		private void SettingsPage()
 		{
-            var soundCard=Card("Little sounds","A soft two-note chime after a confirmed performance mode change.",145);
-            Label soundDesc=soundCard.Controls.OfType<Label>().Last();
-            var sounds=new CheckBox{Text="Play performance mode sounds",Checked=modeSounds,Location=new Point(S(22),S(99))};
-            ConfigureWrappingCheckBox(sounds,soundCard.Width);
-            sounds.CheckedChanged+=(s,e)=>{modeSounds=sounds.Checked;try{Directory.CreateDirectory(Store.DirectoryPath);File.WriteAllText(Path.Combine(Store.DirectoryPath,"mode-sounds.txt"),modeSounds.ToString());}catch(Exception error){status.Text="Sound preference: "+error.Message;}};soundCard.Controls.Add(sounds);
-            RegisterCardReflow(soundCard,()=>{
-                ReflowCardHeader(soundCard,soundDesc);
-                ConfigureWrappingCheckBox(sounds,soundCard.Width);
-                sounds.Location=new Point(S(22),soundDesc.Bottom+S(10));
-                soundCard.Height=Math.Max(S(130),sounds.Bottom+S(16));
+            settingsTabs = new BufferedPanel { Height = S(36), BackColor = Color.Transparent, Visible = false };
+            settingsTabPrimaryBtn = (RaisedButton)Button("General & power", delegate { settingsShowSecondary = false; FitCards(); });
+            settingsTabSecondaryBtn = (RaisedButton)Button("Shortcuts & updates", delegate { settingsShowSecondary = true; FitCards(); });
+            settingsTabPrimaryBtn.Navigation = false; settingsTabSecondaryBtn.Navigation = false;
+            settingsTabs.Controls.Add(settingsTabPrimaryBtn);
+            settingsTabs.Controls.Add(settingsTabSecondaryBtn);
+            page.Controls.Add(settingsTabs);
+
+            var prefCard = Card("General & startup", "Sounds, Energy saver, startup, and language.", 250);
+            settingsPrefCard = prefCard;
+            Label prefDesc = prefCard.Controls.OfType<Label>().Last();
+
+            var sounds = new CheckBox { Text = "Play performance mode sounds", Checked = modeSounds, Font = new Font("Segoe UI", 9.5f), ForeColor = ink };
+            sounds.CheckedChanged += (s, e) => { modeSounds = sounds.Checked; try { Directory.CreateDirectory(Store.DirectoryPath); File.WriteAllText(Path.Combine(Store.DirectoryPath, "mode-sounds.txt"), modeSounds.ToString()); } catch (Exception error) { status.Text = "Sound preference: " + error.Message; } };
+            prefCard.Controls.Add(sounds);
+
+            settingsEnergySaver = new CheckBox { Text = "Turn on Windows Energy saver in Quiet mode", Checked = autoEnergySaver, Font = new Font("Segoe UI", 9.5f), ForeColor = ink };
+            settingsEnergySaver.CheckedChanged += (s, e) => { if (settingsEnergySaver.Checked != autoEnergySaver) SetAutoEnergySaver(settingsEnergySaver.Checked); };
+            prefCard.Controls.Add(settingsEnergySaver);
+
+            CheckBox lockKey = new CheckBox { Text = "Disable Windows key while gaming", Checked = keyLock.Enabled, Font = new Font("Segoe UI", 9.5f), ForeColor = ink };
+            bool revertingLock = false;
+            lockKey.CheckedChanged += delegate {
+                if (!revertingLock) {
+                    if (ConfirmPreview(new Request { Action = "windows-key", Enabled = lockKey.Checked })) {
+                        try { keyLock.Set(lockKey.Checked); status.Text = (lockKey.Checked ? "Windows key locked. Uncheck here or exit GTBook to release it." : "Windows key restored."); return; }
+                        catch (Exception ex3) { status.Text = ex3.Message; return; }
+                    }
+                    revertingLock = true; lockKey.Checked = !lockKey.Checked; revertingLock = false;
+                }
+            };
+            prefCard.Controls.Add(lockKey);
+
+            CheckBox startupBox = new CheckBox { Text = "Start GTBook with Windows", Checked = false, Enabled = false, Font = new Font("Segoe UI", 9.5f), ForeColor = ink };
+            prefCard.Controls.Add(startupBox);
+            LoadStartupCheckbox(startupBox);
+
+            Label langLabel = Label("Language", 8.5f, true);
+            prefCard.Controls.Add(langLabel);
+            ComboBox choice = Effect(prefCard, Languages.Names, Languages.Current, S(180));
+            choice.SelectedIndexChanged += delegate {
+                try { Languages.Select(choice.Text); ClearCachedPages(); ShowPage("Settings"); status.Text = "Language preference saved."; }
+                catch (Exception ex2) { status.Text = ex2.Message; }
+            };
+            Button hideBtn = Button("Hide to tray", delegate { Hide(); });
+            prefCard.Controls.Add(hideBtn);
+
+            RegisterCardReflow(prefCard, () => {
+                ReflowCardHeader(prefCard, prefDesc);
+                int padX = S(20), innerW = Math.Max(S(160), prefCard.Width - 2 * padX);
+                prefDesc.Left = padX; prefDesc.Width = innerW;
+                int y = prefDesc.Bottom + S(8);
+                foreach (var cb in new[] { sounds, settingsEnergySaver, lockKey, startupBox }) {
+                    ConfigureWrappingCheckBox(cb, prefCard.Width, 20);
+                    cb.Location = new Point(padX, y);
+                    y = cb.Bottom + S(6);
+                }
+                langLabel.SetBounds(padX, y + S(2), innerW, S(18));
+                int ctrlTop = langLabel.Bottom + S(4);
+                int gap = S(10);
+                int langW = Math.Max(S(110), (innerW - gap) / 2);
+                int hideW = Math.Max(S(100), innerW - langW - gap);
+                choice.SetBounds(padX, ctrlTop, langW, S(34));
+                hideBtn.SetBounds(choice.Right + gap, ctrlTop - S(2), hideW, S(36));
+                prefCard.Height = Math.Max(choice.Bottom, hideBtn.Bottom) + S(12);
             });
 
-            var energyCard=Card("Windows Energy saver","Sync Windows Energy saver with Quiet mode for best battery, cool temps, and silent fans.",145);
-            Label energyDesc=energyCard.Controls.OfType<Label>().Last();
-            settingsEnergySaver=new CheckBox{Text="Turn on Windows Energy saver in Quiet mode (off in Balanced, Performance & Turbo)",Checked=autoEnergySaver,Location=new Point(S(22),S(99)),Font=new Font("Segoe UI",9.5f),ForeColor=ink};
-            ConfigureWrappingCheckBox(settingsEnergySaver,energyCard.Width);
-            settingsEnergySaver.CheckedChanged+=(s,e)=>{if(settingsEnergySaver.Checked!=autoEnergySaver)SetAutoEnergySaver(settingsEnergySaver.Checked);};
-            energyCard.Controls.Add(settingsEnergySaver);
-            RegisterCardReflow(energyCard,()=>{
-                ReflowCardHeader(energyCard,energyDesc);
-                ConfigureWrappingCheckBox(settingsEnergySaver,energyCard.Width);
-                settingsEnergySaver.Location=new Point(S(22),energyDesc.Bottom+S(10));
-                energyCard.Height=Math.Max(S(140),settingsEnergySaver.Bottom+S(16));
+            var powerCard = Card("Cooling, USB & tools", "Firmware fans, off-mode USB charging, captures, and reset.", 250);
+            settingsPowerCard = powerCard;
+            Label powerDesc = powerCard.Controls.OfType<Label>().Last();
+            Button fanMaxBtn = Button("Fan Max", async delegate { await Run(new Request { Action = "fan", Enabled = true }, null); });
+            Button autoFanBtn = Button("Auto fans", async delegate { await Run(new Request { Action = "auto" }, null); });
+            powerCard.Controls.Add(fanMaxBtn); powerCard.Controls.Add(autoFanBtn);
+
+            Label usbHdr = Label("USB CHARGING WHILE OFF", 8f, true);
+            usbHdr.ForeColor = Theme.OrangeInk;
+            powerCard.Controls.Add(usbHdr);
+            usbOn = (RaisedButton)Button("Charging ON", async delegate { await Run(new Request { Action = "usb", Enabled = true }, null); });
+            usbOff = (RaisedButton)Button("Charging OFF", async delegate { await Run(new Request { Action = "usb", Enabled = false }, null); });
+            powerCard.Controls.Add(usbOn); powerCard.Controls.Add(usbOff);
+            usbState = Label("Reading firmware setting…", 9.5f, true);
+            powerCard.Controls.Add(usbState);
+
+            Button openShots = Button("Open screenshots", OpenScreenshots);
+            Button resetLights = Button("Reset lighting", delegate {
+                keyboard.Effect = "Static"; rear.Effect = "Static";
+                keyboard.Brightness = (rear.Brightness = 65);
+                for (int j = 0; j < 4; j++) keyboard.Colors[j] = (rear.Colors[j] = "#7600FF");
+                RearEdited(); ClearCachedPage("Lighting"); ShowPage("Lighting");
+                status.Text = "Default choices selected. Press Apply to send them to the device.";
+            });
+            powerCard.Controls.Add(openShots); powerCard.Controls.Add(resetLights);
+
+            RegisterCardReflow(powerCard, () => {
+                ReflowCardHeader(powerCard, powerDesc);
+                int padX = S(20), innerW = Math.Max(S(160), powerCard.Width - 2 * padX), gap = S(8);
+                powerDesc.Left = padX; powerDesc.Width = innerW;
+                int bw = Math.Max(S(80), (innerW - gap) / 2);
+                int y = powerDesc.Bottom + S(8);
+                fanMaxBtn.SetBounds(padX, y, bw, S(36));
+                autoFanBtn.SetBounds(fanMaxBtn.Right + gap, y, bw, S(36));
+                usbHdr.SetBounds(padX, fanMaxBtn.Bottom + S(10), innerW, S(18));
+                int uTop = usbHdr.Bottom + S(4);
+                usbOn.SetBounds(padX, uTop, bw, S(36));
+                usbOff.SetBounds(usbOn.Right + gap, uTop, bw, S(36));
+                usbState.Location = new Point(padX, usbOn.Bottom + S(6));
+                usbState.Width = innerW;
+                usbState.Height = MeasureLabelHeight(usbState, innerW, S(20));
+                int toolsTop = usbState.Bottom + S(10);
+                openShots.SetBounds(padX, toolsTop, bw, S(36));
+                resetLights.SetBounds(openShots.Right + gap, toolsTop, bw, S(36));
+                powerCard.Height = openShots.Bottom + S(12);
             });
 
-            var screenCard=Card("Full-screen screenshots","Press PrtScn once. The shared Insert / PrtScn key works without Fn.",175);
-            Label screenDesc=screenCard.Controls.OfType<Label>().Last();
-            var screenInfo=Label("Saved as PNG in Pictures / GTBOOK Essentials Screenshots.\nAlso copied to the clipboard when it is available.",9);screenInfo.SetBounds(S(22),S(91),screenCard.Width-S(44),S(44));screenInfo.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;screenCard.Controls.Add(screenInfo);
-            var openShots=Button("Open screenshots",OpenScreenshots);openShots.SetBounds(S(22),S(135),S(185),S(36));screenCard.Controls.Add(openShots);
-            RegisterCardReflow(screenCard,()=>{
-                ReflowCardHeader(screenCard,screenDesc);
-                screenInfo.Location=new Point(S(22),screenDesc.Bottom+S(8));
-                screenInfo.Width=Math.Max(S(80),screenCard.Width-S(44));
-                screenInfo.Height=MeasureLabelHeight(screenInfo,screenInfo.Width,S(32));
-                openShots.SetBounds(S(22),screenInfo.Bottom+S(10),S(185),S(36));
-                screenCard.Height=openShots.Bottom+S(16);
+            SoftPanel keysCard = Card("Laptop shortcut keys", "Works from the tray too · PrtScn captures full screen.", 200);
+            settingsKeysCard = keysCard;
+            Label keysDesc = keysCard.Controls.OfType<Label>().Last();
+            CheckBox enable = new CheckBox { Text = "Use Toolkit F1 / F2 / F3 controls", Checked = fnKeys, Font = new Font("Segoe UI", 9.5f), ForeColor = ink };
+            bool revertingKeys = false;
+            enable.CheckedChanged += delegate {
+                if (!revertingKeys) {
+                    bool @checked = enable.Checked;
+                    if (ConfirmPreview(new Request { Action = "software-fn", Enabled = @checked })) {
+                        fnKeys = @checked;
+                        if (laptopKeys != null) laptopKeys.MediaKeys = @checked;
+                        try { Directory.CreateDirectory(Store.DirectoryPath); File.WriteAllText(Path.Combine(Store.DirectoryPath, "fn-keys.txt"), @checked.ToString()); status.Text = "Laptop shortcut preference saved."; return; }
+                        catch (Exception ex) { status.Text = ex.Message; return; }
+                    }
+                    revertingKeys = true; enable.Checked = !@checked; revertingKeys = false;
+                }
+            };
+            keysCard.Controls.Add(enable);
+            Label keysGuide = Label("F1 / F2: Screen brightness −10% / +10%\nF3 tap: Keyboard brightness · F3 hold 0.8s: Next effect\nHold Shift / Ctrl / Alt for normal F1–F3 · media uses Windows.", 9f);
+            keysCard.Controls.Add(keysGuide);
+            RegisterCardReflow(keysCard, () => {
+                ReflowCardHeader(keysCard, keysDesc);
+                int padX = S(20), innerW = Math.Max(S(160), keysCard.Width - 2 * padX);
+                keysDesc.Left = padX; keysDesc.Width = innerW;
+                ConfigureWrappingCheckBox(enable, keysCard.Width, 20);
+                enable.Location = new Point(padX, keysDesc.Bottom + S(8));
+                keysGuide.Location = new Point(padX, enable.Bottom + S(6));
+                keysGuide.Width = innerW;
+                keysGuide.Height = MeasureLabelHeight(keysGuide, innerW, S(54));
+                keysCard.Height = keysGuide.Bottom + S(12);
             });
 
-			SoftPanel softPanel = Card("Cooling", "Let the firmware cool automatically, or use full fans when you need them.", 158);
-			Label coolingDesc = softPanel.Controls.OfType<Label>().Last();
-			var tableLayoutPanel2 = new BufferedTableLayoutPanel
-			{
-				Location = new Point(S(22), S(100)),
-				Size = new Size(softPanel.Width - S(44), S(45)),
-				ColumnCount = 2,
-				RowCount = 1,
-				Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-				BackColor = Color.Transparent
-			};
-			for (int i = 0; i < 2; i++)
-			{
-				tableLayoutPanel2.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
-			}
-			tableLayoutPanel2.Controls.Add(Button("Fan Max", async delegate
-			{
-				await Run(new Request
-				{
-					Action = "fan",
-					Enabled = true
-				}, null);
-			}));
-			tableLayoutPanel2.Controls.Add(Button("Auto fans", async delegate
-			{
-				await Run(new Request
-				{
-					Action = "auto"
-				}, null);
-			}));
-			foreach (Control control in tableLayoutPanel2.Controls)
-			{
-				control.Dock = DockStyle.Fill;
-				control.Margin = new Padding(0, 0, S(6), S(4));
-			}
-			softPanel.Controls.Add(tableLayoutPanel2);
-			RegisterCardReflow(softPanel,()=>{
-                ReflowCardHeader(softPanel,coolingDesc);
-                tableLayoutPanel2.SetBounds(S(22),coolingDesc.Bottom+S(12),Math.Max(S(160),softPanel.Width-S(44)),S(45));
-                softPanel.Height=tableLayoutPanel2.Bottom+S(16);
-            });
-
-            var charging=Card("USB charging while off","Save the laptop's firmware setting for USB power during sleep or shutdown.",226);
-            Label chargingDesc=charging.Controls.OfType<Label>().Last();
-            usbOn=(RaisedButton)Button("Charging ON",async delegate{await Run(new Request{Action="usb",Enabled=true},null);});
-            usbOff=(RaisedButton)Button("Charging OFF",async delegate{await Run(new Request{Action="usb",Enabled=false},null);});
-            usbOn.SetBounds(S(22),S(96),S(180),S(42));usbOff.SetBounds(S(214),S(96),S(180),S(42));charging.Controls.Add(usbOn);charging.Controls.Add(usbOff);
-            usbState=Label("Reading firmware setting…",10,true);usbState.SetBounds(S(22),S(146),charging.Width-S(44),S(27));usbState.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;charging.Controls.Add(usbState);
-            var chargingHelp=Label("Use a charging-capable USB port. Power while shut down depends on firmware, the port and AC/battery state.",9);chargingHelp.SetBounds(S(22),S(180),charging.Width-S(44),S(40));chargingHelp.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;charging.Controls.Add(chargingHelp);
-            RegisterCardReflow(charging,()=>{
-                ReflowCardHeader(charging,chargingDesc);
-                int innerW=Math.Max(S(160),charging.Width-S(44));
-                int btnW=Math.Min(S(180),Math.Max(S(100),(innerW-S(12))/2));
-                int btnTop=chargingDesc.Bottom+S(10);
-                usbOn.SetBounds(S(22),btnTop,btnW,S(42));
-                usbOff.SetBounds(usbOn.Right+S(12),btnTop,btnW,S(42));
-                usbState.Location=new Point(S(22),usbOn.Bottom+S(10));
-                usbState.Width=innerW;
-                usbState.Height=MeasureLabelHeight(usbState,innerW,S(24));
-                chargingHelp.Location=new Point(S(22),usbState.Bottom+S(6));
-                chargingHelp.Width=innerW;
-                chargingHelp.Height=MeasureLabelHeight(chargingHelp,innerW,S(26));
-                charging.Height=chargingHelp.Bottom+S(16);
-            });
-
-            SoftPanel softPanel3 = Card("Make yourself at home", "Windows-key lock lasts while this app is running. Closing the app releases it.", 225);
-			Label homeDesc = softPanel3.Controls.OfType<Label>().Last();
-			CheckBox lockKey = new CheckBox
-			{
-				Text = "Disable Windows key while gaming",
-				Checked = keyLock.Enabled,
-				Location = new Point(S(22), S(98))
-			};
-			ConfigureWrappingCheckBox(lockKey, softPanel3.Width);
-			bool revertingLock = false;
-			lockKey.CheckedChanged += delegate
-			{
-				if (!revertingLock)
-				{
-					if (ConfirmPreview(new Request
-					{
-						Action = "windows-key",
-						Enabled = lockKey.Checked
-					}))
-					{
-						try
-						{
-							keyLock.Set(lockKey.Checked);
-							status.Text = (lockKey.Checked ? "Windows key locked. Uncheck here or exit GTBook to release it." : "Windows key restored.");
-							return;
-						}
-						catch (Exception ex3)
-						{
-							status.Text = ex3.Message;
-							return;
-						}
-					}
-					revertingLock = true;
-					lockKey.Checked = !lockKey.Checked;
-					revertingLock = false;
-				}
-			};
-			softPanel3.Controls.Add(lockKey);
-			CheckBox checkBox = new CheckBox();
-			checkBox.Text = "Start GTBook with Windows";
-			checkBox.Checked = false;
-			checkBox.Enabled = false;
-			checkBox.Location = new Point(S(22), S(138));
-			CheckBox checkBox2 = checkBox;
-			ConfigureWrappingCheckBox(checkBox2, softPanel3.Width);
-			softPanel3.Controls.Add(checkBox2);
-			LoadStartupCheckbox(checkBox2);
-			Button button2 = Button("Hide to tray", delegate
-			{
-				Hide();
-			});
-			button2.SetBounds(S(22), S(176), S(160), S(36));
-			softPanel3.Controls.Add(button2);
-			RegisterCardReflow(softPanel3,()=>{
-                ReflowCardHeader(softPanel3,homeDesc);
-                ConfigureWrappingCheckBox(lockKey,softPanel3.Width);
-                lockKey.Location=new Point(S(22),homeDesc.Bottom+S(10));
-                ConfigureWrappingCheckBox(checkBox2,softPanel3.Width);
-                checkBox2.Location=new Point(S(22),lockKey.Bottom+S(10));
-                button2.SetBounds(S(22),checkBox2.Bottom+S(12),S(160),S(36));
-                softPanel3.Height=button2.Bottom+S(16);
-            });
-			Button button3 = Button("Reset lighting choices", delegate
-			{
-				keyboard.Effect = "Static";
-				rear.Effect = "Static";
-				keyboard.Brightness = (rear.Brightness = 65);
-				for (int j = 0; j < 4; j++)
-				{
-					keyboard.Colors[j] = (rear.Colors[j] = "#7600FF");
-				}
-				RearEdited();
-				ClearCachedPage("Lighting");
-				ShowPage("Lighting");
-				status.Text = "Default choices selected. Press Apply to send them to the device.";
-			});
-			page.Controls.Add(button3);
-			button3.Width = S(220);
-			SoftPanel softPanel4 = Card("Language", "Original OEM translations are used for control labels. Help text stays in English.", 145);
-			Label langDesc = softPanel4.Controls.OfType<Label>().Last();
-			ComboBox choice = Effect(softPanel4, Languages.Names, Languages.Current, S(99));
-			choice.SelectedIndexChanged += delegate
-			{
-				try
-				{
-					Languages.Select(choice.Text);
-					ClearCachedPages();
-					ShowPage("Settings");
-					status.Text = "Language preference saved.";
-				}
-				catch (Exception ex2)
-				{
-					status.Text = ex2.Message;
-				}
-			};
-			RegisterCardReflow(softPanel4,()=>{
-                ReflowCardHeader(softPanel4,langDesc);
-                choice.Location=new Point(S(22),langDesc.Bottom+S(12));
-                softPanel4.Height=Math.Max(S(145),choice.Bottom+S(18));
-            });
-
-			SoftPanel softPanel5 = Card("Laptop shortcut keys", "Same F1 / F2 / F3 mapping as the previous Toolkit. Works from the system tray too.", 245);
-			Label keysDesc = softPanel5.Controls.OfType<Label>().Last();
-			CheckBox enable = new CheckBox
-			{
-				Text = "Use Toolkit F1 / F2 / F3 controls",
-				Checked = fnKeys,
-				Location = new Point(S(22), S(95))
-			};
-			ConfigureWrappingCheckBox(enable, softPanel5.Width);
-			bool revertingKeys = false;
-			enable.CheckedChanged += delegate
-			{
-				if (!revertingKeys)
-				{
-					bool @checked = enable.Checked;
-					if (ConfirmPreview(new Request
-					{
-						Action = "software-fn",
-						Enabled = @checked
-					}))
-					{
-						fnKeys = @checked;
-						if (laptopKeys != null)
-						{
-							laptopKeys.MediaKeys = @checked;
-						}
-						try
-						{
-							Directory.CreateDirectory(Store.DirectoryPath);
-							File.WriteAllText(Path.Combine(Store.DirectoryPath, "fn-keys.txt"), @checked.ToString());
-							status.Text = "Laptop shortcut preference saved.";
-							return;
-						}
-						catch (Exception ex)
-						{
-							status.Text = ex.Message;
-							return;
-						}
-					}
-					revertingKeys = true;
-					enable.Checked = !@checked;
-					revertingKeys = false;
-				}
-			};
-			softPanel5.Controls.Add(enable);
-			Label label = Label("F1  Screen brightness −10%     F2  Screen brightness +10%\nF3 tap  Keyboard brightness     F3 hold 0.8 seconds  Next effect once\nRelease F3 before holding again. Shift / Ctrl / Alt keeps normal F1–F3.\nNative volume, mute and other media keys remain handled by Windows.", 9f);
-			label.SetBounds(S(22), S(132), softPanel5.Width - S(44), S(96));
-			label.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-			softPanel5.Controls.Add(label);
-			RegisterCardReflow(softPanel5,()=>{
-                ReflowCardHeader(softPanel5,keysDesc);
-                ConfigureWrappingCheckBox(enable,softPanel5.Width);
-                enable.Location=new Point(S(22),keysDesc.Bottom+S(10));
-                int lw=Math.Max(S(160),softPanel5.Width-S(44));
-                label.Location=new Point(S(22),enable.Bottom+S(8));
-                label.Width=lw;
-                label.Height=MeasureLabelHeight(label,lw,S(80));
-                softPanel5.Height=label.Bottom+S(16);
-            });
-
-            SoftPanel updateCard = Card("App updates", "Check GitHub releases and install new versions directly from here.", 220);
+            SoftPanel updateCard = Card("App updates", "Check GitHub releases and install directly.", 200);
             updateCardRef = updateCard;
             Label updateTitle = updateCard.Controls.OfType<Label>().FirstOrDefault();
             Label updateDesc = updateCard.Controls.OfType<Label>().LastOrDefault(l => l != updateTitle);
-            if (updateTitle != null) updateTitle.Width = Math.Max(S(80), updateCard.Width - S(250));
-            updateStatusPill.SetBounds(updateCard.Width - S(224), S(16), S(200), S(26));
+            if (updateTitle != null) updateTitle.Width = Math.Max(S(80), updateCard.Width - S(210));
+            updateStatusPill.SetBounds(updateCard.Width - S(190), S(12), S(170), S(24));
             updateStatusPill.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             updateCard.Controls.Add(updateStatusPill);
             updateStatusPill.BringToFront();
 
             updateSummaryLabel = Label("", 10f, true);
-            updateSummaryLabel.SetBounds(S(22), S(86), updateCard.Width - S(44), S(26));
             updateCard.Controls.Add(updateSummaryLabel);
-
             updateDetailsLabel = Label("", 9f);
-            updateDetailsLabel.SetBounds(S(22), S(116), updateCard.Width - S(44), S(36));
             updateCard.Controls.Add(updateDetailsLabel);
-
             updateActionButton = (RaisedButton)Button("Check for updates", async delegate { await StartAppUpdateAsync(); });
-            updateActionButton.SetBounds(S(22), S(162), S(190), S(40));
             updateCard.Controls.Add(updateActionButton);
-
             updateGithubButton = (RaisedButton)Button("GitHub releases", delegate {
                 try {
                     string url = (latestUpdate != null && AppUpdater.IsTrustedDownloadUrl(latestUpdate.HtmlUrl)) ? latestUpdate.HtmlUrl : AppUpdater.ReleasesPageUrl;
                     Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
                 } catch (Exception ex) { status.Text = ex.Message; }
             });
-            updateGithubButton.SetBounds(S(224), S(162), S(170), S(40));
             updateCard.Controls.Add(updateGithubButton);
 
             RegisterCardReflow(updateCard, () => {
-                updateStatusPill.SetBounds(updateCard.Width - S(224), S(16), S(200), S(26));
+                int padX = S(20), innerW = Math.Max(S(160), updateCard.Width - 2 * padX), gap = S(8);
+                int pillW = Math.Min(S(172), Math.Max(S(120), innerW / 2));
+                updateStatusPill.SetBounds(updateCard.Width - padX - pillW, S(12), pillW, S(24));
                 if (updateTitle != null && !updateTitle.IsDisposed) {
-                    updateTitle.Location = new Point(S(22), S(16));
-                    updateTitle.Width = Math.Max(S(80), updateStatusPill.Left - updateTitle.Left - S(8));
-                    updateTitle.Height = MeasureLabelHeight(updateTitle, updateTitle.Width, S(34));
+                    updateTitle.Location = new Point(padX, S(12));
+                    updateTitle.Width = Math.Max(S(80), updateStatusPill.Left - updateTitle.Left - S(6));
+                    updateTitle.Height = MeasureLabelHeight(updateTitle, updateTitle.Width, S(28));
                 }
-                int innerW = Math.Max(S(160), updateCard.Width - S(44));
                 if (updateDesc != null && !updateDesc.IsDisposed) {
-                    updateDesc.Left = S(23);
-                    updateDesc.Width = Math.Max(S(160), updateCard.Width - S(46));
-                    updateDesc.Top = (updateTitle != null && !updateTitle.IsDisposed) ? Math.Max(S(50), Math.Max(updateTitle.Bottom, updateStatusPill.Bottom) + S(2)) : S(50);
-                    updateDesc.Height = MeasureLabelHeight(updateDesc, updateDesc.Width, S(22));
+                    updateDesc.Left = padX;
+                    updateDesc.Width = innerW;
+                    updateDesc.Top = (updateTitle != null && !updateTitle.IsDisposed) ? Math.Max(updateTitle.Bottom, updateStatusPill.Bottom) + S(2) : S(42);
+                    updateDesc.Height = MeasureLabelHeight(updateDesc, innerW, S(20));
                 }
-                int contentTop = (updateDesc != null && !updateDesc.IsDisposed) ? updateDesc.Bottom + S(10) : S(82);
-                updateSummaryLabel.Location = new Point(S(22), contentTop);
+                int contentTop = (updateDesc != null && !updateDesc.IsDisposed) ? updateDesc.Bottom + S(6) : S(68);
+                updateSummaryLabel.Location = new Point(padX, contentTop);
                 updateSummaryLabel.Width = innerW;
-                updateSummaryLabel.Height = MeasureLabelHeight(updateSummaryLabel, innerW, S(24));
-                updateDetailsLabel.Location = new Point(S(22), updateSummaryLabel.Bottom + S(4));
+                updateSummaryLabel.Height = MeasureLabelHeight(updateSummaryLabel, innerW, S(22));
+                updateDetailsLabel.Location = new Point(padX, updateSummaryLabel.Bottom + S(4));
                 updateDetailsLabel.Width = innerW;
-                updateDetailsLabel.Height = MeasureLabelHeight(updateDetailsLabel, innerW, S(22));
-                int btnTop = updateDetailsLabel.Bottom + S(12);
-                int gap = S(12);
-                int actionW = Math.Min(S(210), Math.Max(S(130), (innerW - gap) / 2));
-                int ghW = Math.Min(S(175), Math.Max(S(120), innerW - actionW - gap));
-                updateActionButton.SetBounds(S(22), btnTop, actionW, S(40));
-                updateGithubButton.SetBounds(updateActionButton.Right + gap, btnTop, ghW, S(40));
-                updateCard.Height = Math.Max(S(190), updateActionButton.Bottom + S(16));
+                updateDetailsLabel.Height = MeasureLabelHeight(updateDetailsLabel, innerW, S(20));
+                int btnTop = updateDetailsLabel.Bottom + S(10);
+                int actionW = Math.Max(S(95), (innerW - gap) / 2);
+                int ghW = Math.Max(S(95), innerW - actionW - gap);
+                updateActionButton.SetBounds(padX, btnTop, actionW, S(36));
+                updateGithubButton.SetBounds(updateActionButton.Right + gap, btnTop, ghW, S(36));
+                updateCard.Height = updateActionButton.Bottom + S(12);
             });
             RefreshUpdateUi();
 		}
@@ -2669,6 +2651,9 @@ namespace GTBook
             if (settingsNavButton != null && !settingsNavButton.IsDisposed) {
                 settingsNavButton.BadgeDot = hasUpdate;
                 settingsNavButton.AccessibleName = hasUpdate ? "Settings (Update available)" : "Settings";
+            }
+            if (settingsTabSecondaryBtn != null && !settingsTabSecondaryBtn.IsDisposed) {
+                settingsTabSecondaryBtn.BadgeDot = hasUpdate;
             }
             string currentVer = AppUpdater.FormatVersion(AppUpdater.CurrentVersion);
             if (!updateStatusPill.IsDisposed) {
@@ -3238,17 +3223,30 @@ namespace GTBook
 
             if(specView==null||specView.IsDisposed)specView=new DeviceSpecView();
             if(specView.Parent!=null)specView.Parent.Controls.Remove(specView);
-            int specTop = Math.Max(S(93), diagDesc.Bottom + S(12));
-            specView.SetBounds(S(22), specTop, softPanel.Width - S(44), S(400));
+            int specTop = Math.Max(S(78), diagDesc.Bottom + S(10));
+            specView.SetBounds(S(22), specTop, softPanel.Width - S(44), S(380));
             specView.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             specView.SetReport(details.Text);
+			var flowLayoutPanel2 = new BufferedPanel
+			{
+				Height = S(48),
+				Width = S(640),
+				BackColor = Color.Transparent
+			};
             Action syncDiagHeight = () => {
                 if (softPanel.IsDisposed || specView.IsDisposed) return;
                 ReflowCardHeader(softPanel, diagDesc);
+                int top = Math.Max(S(74), diagDesc.Bottom + S(8));
+                int maxW = Math.Max(S(160), softPanel.Width - S(44));
+                int estActionH = maxW < S(490) ? S(96) : S(48);
+                int viewportH = page != null && !page.IsDisposed ? page.ClientSize.Height : S(650);
+                int maxSpecH = Math.Max(S(200), viewportH - top - S(16) - estActionH - page.Padding.Vertical - S(12));
                 specView.Left = S(22);
-                specView.Top = Math.Max(S(93), diagDesc.Bottom + S(12));
-                specView.Width = Math.Max(S(160), softPanel.Width - S(44));
-                softPanel.Height = specView.Bottom + S(20);
+                specView.Top = top;
+                specView.Width = maxW;
+                specView.MaxHeight = maxSpecH;
+                specView.RecalculateLayout();
+                softPanel.Height = specView.Bottom + S(12);
             };
             specView.OnHeightChanged = () => {
                 syncDiagHeight();
@@ -3260,13 +3258,6 @@ namespace GTBook
             softPanel.Controls.Add(specView);
             RegisterCardReflow(softPanel, syncDiagHeight);
             syncDiagHeight();
-
-			var flowLayoutPanel2 = new BufferedPanel
-			{
-				Height = S(48),
-				Width = S(640),
-				BackColor = Color.Transparent
-			};
             var refreshBtn=Button("Refresh info", async delegate
 			{
                 await LoadDeviceInfo(true);

@@ -8,6 +8,7 @@ using System.Web.Script.Serialization;
 namespace GTBook {
     public static class Tests {
         public static int Run(string report) {
+            Languages.Current="en-us";
             var output=new StringBuilder(); int passed=0,failed=0;
             Action<string,Action> test=(name,action)=>{try{action();output.AppendLine("PASS "+name);passed++;}catch(Exception e){output.AppendLine("FAIL "+name+": "+e.Message);failed++;}};
             test("Keyboard OEM static layout and checksum",()=>{
@@ -893,12 +894,27 @@ namespace GTBook {
                 System.Windows.Forms.Application.DoEvents();
                 Check(form.IsDisposed,"MainWindow did not dispose cleanly after closing cached pages");
             });
+            test("Closed WheelSafeComboBox ignores mouse wheel and DeviceSpecView stays bounded without scrolling",()=>{
+                using(var form=new System.Windows.Forms.Form{ShowInTaskbar=false,StartPosition=System.Windows.Forms.FormStartPosition.Manual,Location=new System.Drawing.Point(-32000,-32000)})
+                using(var combo=new ComboWheelProbe{DropDownStyle=System.Windows.Forms.ComboBoxStyle.DropDownList}){
+                    combo.Items.AddRange(new object[]{"en-us","fi","fr"});combo.SelectedIndex=0;
+                    form.Controls.Add(combo);form.Show();
+                    combo.Wheel(-120,false);combo.Wheel(120,true);
+                    Check(combo.SelectedIndex==0,"mouse wheel changed closed ComboBox selection");
+                }
+                using(var view=new DeviceSpecView{Width=680,MaxHeight=260}){
+                    view.SetReport("DEVICE\r\nGTBook GL613 · x64\r\nWINDOWS\r\nWindows 11\r\n24H2\r\nLast boot: today\r\nPROCESSOR\r\nCore i7\r\n14 cores\r\nGRAPHICS\r\nIntel Iris Xe\r\nDriver 31.0\r\nOutput: 1920x1080\r\nSTORAGE SPACE\r\nC: · NTFS · 100 GB free of 500 GB\r\nD: · NTFS · 200 GB free of 500 GB\r\nBATTERY\r\nBAT0 · 90%\r\nAC Online");
+                    view.SelectCategory(1);
+                    Check(view.Height<=260,"DeviceSpecView exceeded MaxHeight bound on All tab: h="+view.Height);
+                }
+            });
             output.AppendLine(passed+" passed, "+failed+" failed. Hardware was not changed.");
             File.WriteAllText(report,output.ToString()); return failed==0?0:1;
         }
         static void Check(bool ok,string message){if(!ok)throw new Exception(message);}
         static int Distance(System.Drawing.Color a,System.Drawing.Color b){return Math.Max(Math.Abs(a.R-b.R),Math.Max(Math.Abs(a.G-b.G),Math.Abs(a.B-b.B)));}
         sealed class SliderWheelProbe : WheelSafeTrackBar {public void Wheel(int delta,bool horizontal){var message=System.Windows.Forms.Message.Create(Handle,horizontal?0x020E:0x020A,new IntPtr(delta<<16),IntPtr.Zero);base.WndProc(ref message);}}
+        sealed class ComboWheelProbe : WheelSafeComboBox {public void Wheel(int delta,bool horizontal){var message=System.Windows.Forms.Message.Create(Handle,horizontal?0x020E:0x020A,new IntPtr(delta<<16),IntPtr.Zero);base.WndProc(ref message);}}
         sealed class PaintProbeButton : RaisedButton {public void PaintOnly(System.Drawing.Graphics graphics){base.OnPaint(new System.Windows.Forms.PaintEventArgs(graphics,ClientRectangle));}}
         static void MustThrow(Action action){try{action();}catch(ArgumentException){return;}catch(FormatException){return;}throw new Exception("Invalid input was accepted");}
     }

@@ -197,6 +197,7 @@ namespace GTBook
 			Application.SetCompatibleTextRenderingDefault(false);
 			if (args.Length == 2 && (args[0] == "--render"||args[0]=="--render-dark") && Process.GetCurrentProcess().MainModule.FileName.EndsWith("GTBook.Tests.exe", StringComparison.OrdinalIgnoreCase))
 			{
+                Languages.Current = "en-us";
                 Theme.SetDepth(args[0]=="--render-dark"?1:0);
 				using (MainWindow mainWindow = new MainWindow(true))
 				{

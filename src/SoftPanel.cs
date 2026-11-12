@@ -8,15 +8,14 @@ namespace GTBook
 	{
 		public SoftPanel()
 		{
+			SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
 			DoubleBuffered = true;
 			BackColor = Theme.White;
 			base.Padding = new Padding(22);
-			SetStyle(ControlStyles.ResizeRedraw, true);
 		}
 
 		protected override void OnPaintBackground(PaintEventArgs e)
 		{
-            Theme.PaintUnder(this,e.Graphics);
 		}
 
 		protected override void OnPaint(PaintEventArgs e)
@@ -27,14 +26,14 @@ namespace GTBook
 			RectangleF r = new RectangleF(num, num, (float)base.Width - 3f * num, (float)base.Height - 5f * num);
 			using (GraphicsPath path = Theme.Round(new RectangleF(r.X, r.Y + 3f * num, r.Width, r.Height), 17f * num))
 			{
-				using (SolidBrush brush = new SolidBrush(Color.FromArgb(244,222,203)))
+				using (SolidBrush brush = new SolidBrush(Theme.Tone(Color.FromArgb(244,222,203),Color.FromArgb(5,8,14))))
 				{
 					e.Graphics.FillPath(brush, path);
 				}
 			}
 			using (GraphicsPath path2 = Theme.Round(r, 17f * num))
 			{
-				using (SolidBrush brush2 = new SolidBrush(Theme.White))
+				using (var brush2 = new SolidBrush(Theme.White))
 				{
 					e.Graphics.FillPath(brush2, path2);
 				}
@@ -43,6 +42,7 @@ namespace GTBook
 				{
 					e.Graphics.DrawPath(pen, path2);
 				}
+				using(var bevel=new Pen(Color.FromArgb(28,Color.White),num))e.Graphics.DrawLine(bevel,r.Left+20*num,r.Top+2*num,r.Right-20*num,r.Top+2*num);
 			}
 			base.OnPaint(e);
 		}

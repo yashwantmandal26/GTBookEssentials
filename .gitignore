@@ -1,6 +1,10 @@
 # Local recovery tooling and generated test executables are not release inputs.
+GTBook.exe
 tests/recovery/
 tests/*.exe
+tests/out/
+tests/results.txt
+tests/*.json
 out/
 release-audit-backups/
 tests/release-smoke/

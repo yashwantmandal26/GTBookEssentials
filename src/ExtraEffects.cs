@@ -7,40 +7,95 @@ using System.Threading;
 
 namespace GTBook {
     public static class ExtraEffects {
-        public static readonly string[] Names={"Aurora","Rainbow Prism","Blazing Fire","Comet Trail","Ocean Tide","Sunset Glow","Neon Pulse","Candy Chase","Magnetic Slingshot","Orbital Eclipse"};
+        public static readonly string[] Names={"Aurora","Rainbow Prism","Blazing Fire","Comet Trail","Ocean Tide","Sunset Glow","Neon Pulse","Candy Chase","Magnetic Slingshot","Orbital Eclipse","Zoom Bloom","Meteor Shower","Starlight","Colour Cascade","Silk Flow"};
+        const double Tau=2*Math.PI;
+        static readonly Color[] Candy={Hue(.92),Hue(.50),Hue(.12),Hue(.75)};
+        static readonly Color[] Sunset={Hue(.98),Hue(.045),Hue(.105),Hue(.91)};
+        static readonly Color[] Ocean={Hue(.62),Hue(.50),Hue(.43),Hue(.55)};
+        static readonly double[] StarOffsets={.08,.61,.34,.86};
         public static bool Contains(string name){return Names.Contains(name);}
-        public static bool HasDirection(string name){return Contains(name)&&name!="Magnetic Slingshot";}
-        public static bool UsesColours(string name){return new[]{"Aurora","Comet Trail","Neon Pulse","Magnetic Slingshot","Orbital Eclipse"}.Contains(name);}
+        public static bool HasDirection(string name){return Contains(name)&&name!="Magnetic Slingshot"&&name!="Zoom Bloom"&&name!="Starlight";}
+        public static bool UsesColours(string name){return Contains(name)&&name!="Rainbow Prism"&&name!="Blazing Fire"&&name!="Ocean Tide"&&name!="Sunset Glow"&&name!="Candy Chase";}
         public static string Description(string name){
-            string[] descriptions={"Saturated ribbons drift smoothly across four zones.","A rotating rainbow, one colour per zone.","Warm, gently shifting ember and flame colours.","A bright comet wraps seamlessly with a fading colour trail.","Deep blue and turquoise waves roll across the keyboard.","Orange, coral and pink drift like a sunset.","Two neon colours breathe in staggered waves.","Vivid pink, cyan, gold and violet glide between zones.","Two ribbons cross, trade colours and spring back.","A moving shadow orbits between two coloured rims."};
+            string[] descriptions={"Layered colour ribbons unfurl with a luminous crest.","A full-spectrum ribbon glides through four vivid zones.","Crimson embers ripple into amber and golden flame.","A bright colour crest pulls a long, velvety trail.","Cobalt depths swell into luminous turquoise tides.","Ruby, coral, gold and magenta melt into one another.","Alternating neon colours rise and fall in soft pulses.","Pink, cyan, gold and violet flow in silky ribbons.","Two glowing ribbons meet, exchange colours and rebound.","A velvet shadow glides between two bright colour rims.","A luminous bloom expands from the centre and folds back.","Twin shooting stars sweep past with overlapping trails.","Soft, scattered colour glints shimmer over a dim glow.","A curtain of colour fills each zone, then gently recedes.","Two colours weave through a slow, fluid light current."};
             int i=Array.IndexOf(Names,name);return i<0?"":descriptions[i];
         }
         static double Unit(double value){return Math.Max(0,Math.Min(1,value));}
-        static double Smooth(double value){value=Unit(value);return value*value*(3-2*value);}
+        // Quintic envelopes settle with zero velocity and acceleration.
+        static double Smooth(double value){value=Unit(value);return value*value*value*(value*(value*6-15)+10);}
+        static double Pulse(double phase){return .5+.5*Math.Cos(Tau*phase);}
         static double Glow(double x,double centre,double width){return Math.Exp(-.5*Math.Pow((x-centre)/width,2));}
         static double RingGlow(double x,double centre,double width){double d=((x-centre+2)%4+4)%4-2;return Glow(d,0,width)+Glow(d,4,width)+Glow(d,-4,width);}
         static Color Hue(double h){return LightingColour.Hsv(h,1,1);}
+        // The gentler cubic slope keeps large palette hue changes readable at 15 Hz.
+        static Color Ribbon(Color[] palette,double position){position=(position%4+4)%4;int index=(int)position;double x=position-index;return LightingColour.MixHue(palette[index],palette[(index+1)%4],x*x*(3-2*x));}
         public static double SpeedScale(int speed){return Math.Pow(2,(Math.Max(1,Math.Min(9,speed))-4)/5.0);}
         public static Color[] Frame(Request r,double seconds){
             if(!Contains(r.Effect))throw new ArgumentException("Unknown Extra animation.");
-            // Six seconds per base revolution; bounded speed keeps all four zones readable.
-            double t=Math.Max(0,seconds)*SpeedScale(r.Speed),angle=t*Math.PI/3;
+            // All patterns close over six base seconds. Wrap phase before harmonics to
+            // keep long sessions stable; the existing bounded 15 Hz HID stream is reused.
+            double phase=(Math.Max(0,seconds)*SpeedScale(r.Speed)%6)/6,angle=phase*Tau;
             Color primary=LightingColour.Vivid(ColorTranslator.FromHtml(r.Colors[0])),secondary=LightingColour.Vivid(ColorTranslator.FromHtml(r.Colors[1]));
             // Respect identical colours instead of silently inventing a second colour.
-            var zones=new Color[4];Color[] candy={Hue(.92),Hue(.50),Hue(.12),Hue(.75)};
+            var zones=new Color[4];
             for(int z=0;z<4;z++){
-                double wave=(Math.Sin(angle-z*Math.PI/2)+1)/2;
+                double local=angle-z*Math.PI/2,wave=(Math.Sin(local)+1)/2;
                 switch(r.Effect){
-                    case "Aurora":zones[z]=LightingColour.Dim(LightingColour.MixHue(primary,secondary,wave),.62+.38*(Math.Sin(angle+z*Math.PI/2)+1)/2);break;
-                    case "Rainbow Prism":zones[z]=Hue(z/4.0-t/6);break;
-                    case "Blazing Fire":double heat=wave;zones[z]=LightingColour.Dim(Hue(.008+.12*heat),.58+.42*heat);break;
-                    case "Comet Trail":double head=t*4/6,crest=RingGlow(z,head,.48),tail=.55*RingGlow(z,head-.65,.65)+.25*RingGlow(z,head-1.3,.8);zones[z]=LightingColour.Dim(LightingColour.MixHue(secondary,primary,crest),Unit(.035+.73*crest+.30*tail));break;
-                    case "Ocean Tide":zones[z]=LightingColour.Dim(LightingColour.MixHue(Hue(.65),Hue(.48),wave),.5+.5*wave);break;
-                    case "Sunset Glow":zones[z]=LightingColour.MixHue(Hue(.09),Hue(.94),wave);break;
-                    case "Neon Pulse":zones[z]=LightingColour.Dim(z%2==0?primary:secondary,.06+.94*Math.Pow(wave,1.5));break;
-                    case "Candy Chase":double position=((z-t*4/6)%4+4)%4;int index=(int)position;zones[z]=LightingColour.MixHue(candy[index],candy[(index+1)%4],Smooth(position-index));break;
-                    case "Magnetic Slingshot":double left=1.5-1.5*Math.Cos(angle),right=3-left,a=Glow(z,left,.75),b=Glow(z,right,.75);zones[z]=LightingColour.Dim(LightingColour.MixHue(primary,secondary,b/Math.Max(.001,a+b)),.09+.91*Math.Max(a,b));break;
-                    default:double orbit=t*4/6,shadow=RingGlow(z,orbit,.48),rim=Math.Max(RingGlow(z,orbit-.85,.42),RingGlow(z,orbit+.85,.42));zones[z]=LightingColour.Dim(LightingColour.MixHue(primary,secondary,rim),Unit(.78-.70*shadow+.22*rim));break;
+                    case "Aurora":
+                        double drape=Smooth(Unit(.5+.36*Math.Sin(local)+.18*Math.Cos(2*angle+z*Math.PI/3)));
+                        zones[z]=LightingColour.Dim(LightingColour.MixHue(primary,secondary,drape),.28+.72*Smooth(wave));break;
+                    case "Rainbow Prism":
+                        double prismShimmer=.78+.22*Pulse(phase*2+z/3.0);
+                        zones[z]=LightingColour.Dim(Hue(z/4.0-phase+.02*Math.Sin(angle)),prismShimmer);break;
+                    case "Blazing Fire":
+                        double flame=Smooth(.5+.30*Math.Sin(local)+.15*Math.Sin(2*angle+z*Math.PI)+.08*Math.Cos(3*angle-z));
+                        double ember=.85+.15*Pulse(phase*3+z*.6);
+                        zones[z]=LightingColour.Dim(Hue(.005+.118*flame),Unit((.28+.72*flame)*ember));break;
+                    case "Comet Trail":
+                        double head=phase*4,crest=RingGlow(z,head,.55),tail=.60*RingGlow(z,head-.75,.72)+.25*RingGlow(z,head-1.5,.90);
+                        zones[z]=LightingColour.Dim(LightingColour.MixHue(secondary,primary,crest),Unit(.03+.84*crest+.22*tail));break;
+                    case "Ocean Tide":
+                        double tide=Smooth(.5+.36*Math.Sin(local)+.16*Math.Sin(2*angle-z*Math.PI/2));
+                        double seafoam=Smooth(.5+.36*Math.Sin(local+Math.PI/3));
+                        Color oceanColor=LightingColour.MixHue(Hue(.66),Hue(.44),seafoam);
+                        zones[z]=LightingColour.Dim(oceanColor,.22+.78*tide);break;
+                    case "Sunset Glow":
+                        zones[z]=LightingColour.Dim(Ribbon(Sunset,z*.55-phase*4),.76+.24*wave);break;
+                    case "Neon Pulse":
+                        double beat=Math.Pow(Pulse(phase+(z%2==0?0:.5)),3);
+                        zones[z]=LightingColour.Dim(z%2==0?primary:secondary,.08+.92*Smooth(beat));break;
+                    case "Candy Chase":
+                        double pop=.75+.25*Pulse(phase*4-z*.8);
+                        zones[z]=LightingColour.Dim(Ribbon(Candy,z-phase*4),pop);break;
+                    case "Magnetic Slingshot":
+                        double left=1.5-1.5*Math.Cos(angle),right=3-left,a=Glow(z,left,.68),b=Glow(z,right,.68);
+                        double collide=Glow(Math.Abs(left-right),0,.6);
+                        zones[z]=LightingColour.Dim(LightingColour.MixHue(primary,secondary,b/Math.Max(.001,a+b)),Unit(.05+.78*Math.Max(a,b)+.17*collide));break;
+                    case "Orbital Eclipse":
+                        double orbit=phase*4,shadow=RingGlow(z,orbit,.56),rim=RingGlow(z,orbit-.95,.55);
+                        zones[z]=LightingColour.Dim(LightingColour.MixHue(primary,secondary,rim),Unit(.82-.78*shadow+.22*rim));break;
+                    case "Zoom Bloom":
+                        // A one-dimensional radial wave: the two centre zones open
+                        // together, reach the outer pair, then fold back without a cut.
+                        double radius=1-Math.Cos(angle),distance=Math.Abs(z-1.5),bloom=Glow(distance,radius,.62);
+                        zones[z]=LightingColour.Dim(LightingColour.MixHue(primary,secondary,Smooth(radius/2)),.065+.935*bloom);break;
+                    case "Meteor Shower":
+                        double first=RingGlow(z,phase*4,.54),second=RingGlow(z,phase*4-2,.62),wake=RingGlow(z,phase*4-.8,.78);
+                        double spark=.88+.12*Pulse(phase*4+z*.5);
+                        zones[z]=LightingColour.Dim(LightingColour.MixHue(primary,secondary,second/Math.Max(.001,first+second)),Unit((.025+.86*first+.56*second+.15*wake)*spark));break;
+                    case "Starlight":
+                        // Fixed phase offsets give a scattered twinkle, without random
+                        // frame noise, hard flashes, or pretending to address each key.
+                        double glint=Math.Pow(Pulse(phase+StarOffsets[z]),3),halo=Pulse(2*phase+z*.31);
+                        zones[z]=LightingColour.Dim(LightingColour.MixHue(primary,secondary,Smooth(halo)),.09+.91*glint);break;
+                    case "Colour Cascade":
+                        double fill=Smooth(Unit(.5+.45*Math.Sin(local)+.20*Math.Sin(2*angle-z*.9)));
+                        double crestCascade=Pulse(phase-z/4.0);
+                        zones[z]=LightingColour.Dim(LightingColour.MixHue(primary,secondary,fill),.32+.68*Smooth(crestCascade));break;
+                    case "Silk Flow": // Broad, intertwined currents rather than a chase.
+                        double silk=Unit(.5+.32*Math.Sin(angle-z*.75)+.18*Math.Sin(2*angle+z*.55));
+                        zones[z]=LightingColour.Dim(LightingColour.MixHue(primary,secondary,Smooth(silk)),.62+.38*Pulse(phase+z/6.0));break;
+                    default:throw new ArgumentException("Unknown Extra animation.");
                 }
             }
             if(r.Direction==1&&HasDirection(r.Effect))Array.Reverse(zones);
@@ -123,14 +178,17 @@ namespace GTBook {
                     string conflictFailure="";int checkingConflict=0;
                     using(var monitor=new System.Threading.Timer(state=>{
                         if(Interlocked.Exchange(ref checkingConflict,1)!=0)return;
-                        try{Volatile.Write(ref conflictFailure,Hardware.Conflict());}catch(Exception error){Volatile.Write(ref conflictFailure,error.Message);}finally{Volatile.Write(ref checkingConflict,0);}
-                    },null,1000,2000)){
+                        try{
+                            string c=Hardware.Conflict();
+                            if(c.Contains("ControlCenter")||c.Contains("InfinixToolkit")||c.Contains("old Python toolkit"))Volatile.Write(ref conflictFailure,c);
+                        }catch{}finally{Volatile.Write(ref checkingConflict,0);}
+                    },null,2000,5000)){
                     int frames=LiveStream(r,()=>stop.WaitOne(0),()=>{
                         string conflict=Volatile.Read(ref conflictFailure);if(conflict.Length>0)throw new IOException(conflict);
                         return OwnerAlive(r.OwnerProcessId,r.OwnerStartedTicks);
                     },packets=>{
                         if(previous!=null&&packets.Select((p,i)=>p.SequenceEqual(previous[i])).All(equal=>equal))return true;
-                        for(int i=0;i<4;i++)if(previous==null||!packets[i].SequenceEqual(previous[i]))keyboard.Send(packets[i]);previous=packets;return true;
+                        for(int i=0;i<4;i++)if(previous==null||!packets[i].SequenceEqual(previous[i])){if(i>0)Thread.Sleep(1);keyboard.Send(packets[i]);}previous=packets;return true;
                     },enabled=>{if(!lease.Acquire(3000))throw new IOException("Keyboard power control is busy.");try{using(var oem=new OemProtocol())oem.KeyLight(enabled);}finally{lease.Release();}},()=>{
                         Request next;int read;
                         if(channel==null||!channel.TryRead(out next,out read))return null;

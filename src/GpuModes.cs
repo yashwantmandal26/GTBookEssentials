@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Management;
 
 namespace GTBook {
     public static class GpuModes {
@@ -8,6 +9,25 @@ namespace GTBook {
         public static readonly string[] Names={"dGPU only","Hybrid","iGPU only"};
         public static int Raw(int selection){if(selection<0||selection>2)throw new ArgumentException("Choose a supported GPU mode.");return selection+1;}
         public static string Name(uint raw){return raw>=1&&raw<=3?Names[raw-1]:"Unknown ("+raw+")";}
+        public static int DetectPnpMode(){
+            try{
+                using(var searcher=new ManagementObjectSearcher("SELECT Name, Status FROM Win32_VideoController"))
+                using(var rows=searcher.Get()){
+                    bool hasIntel=false,hasNvidia=false;
+                    foreach(ManagementObject row in rows)using(row){
+                        string name=Convert.ToString(row["Name"]).ToLowerInvariant();
+                        string status=Convert.ToString(row["Status"]);
+                        if(status!="OK")continue;
+                        if(name.Contains("intel")||name.Contains("amd")||name.Contains("radeon"))hasIntel=true;
+                        if(name.Contains("nvidia")||name.Contains("geforce")||name.Contains("rtx")||name.Contains("gtx"))hasNvidia=true;
+                    }
+                    if(hasIntel&&hasNvidia)return 2;
+                    if(hasNvidia)return 1;
+                    if(hasIntel)return 3;
+                }
+            }catch{}
+            return 0;
+        }
         public static Reply Apply(OemProtocol oem,int selection,Action<int> delay){
             int target=Raw(selection);oem.SetGPUMode(target);uint actual=0;
             for(int i=0;i<8;i++){delay(100);actual=oem.GetGPUMode();if(actual==target){

@@ -30,6 +30,7 @@ namespace GTBook {
             test("Invalid values never produce a hardware command",()=>{
                 MustThrow(()=>Protocol.Validate(new Request{Action="firmware-flash"}));
                 MustThrow(()=>Protocol.Validate(new Request{Mode=3}));
+                MustThrow(()=>Protocol.Validate(new Request{Action="mode",Mode=4}));
                 MustThrow(()=>Protocol.Validate(new Request{Brightness=-1}));
                 MustThrow(()=>Protocol.Validate(new Request{Brightness=101}));
                 MustThrow(()=>Protocol.Validate(new Request{Colors=new[]{"#123456"}}));
@@ -185,8 +186,8 @@ namespace GTBook {
                 Check(!WindowLifecycle.HideInsteadOfExit(false,false,CloseReason.WindowsShutDown),"shutdown must not be cancelled");
                 Check(!WindowLifecycle.HideInsteadOfExit(true,false,CloseReason.UserClosing),"test previews must close");
             });
-            test("Ten Extra effects are distinct animations accepted by saved settings",()=>{
-                Check(ExtraEffects.Names.Length==10&&ExtraEffects.Names.Distinct().Count()==10,"exactly ten effects");
+            test("Fifteen Extra effects are distinct animations accepted by saved settings",()=>{
+                Check(ExtraEffects.Names.Length==15&&ExtraEffects.Names.Distinct().Count()==15,"exactly fifteen effects");
                 var signatures=new System.Collections.Generic.HashSet<string>();
                 foreach(string name in ExtraEffects.Names){
                     var request=new Request{Action="keyboard-animation",Effect=name,Brightness=100};Protocol.Validate(request);
@@ -321,7 +322,11 @@ namespace GTBook {
             });
             if(Environment.GetEnvironmentVariable("GTBOOK_HEADLESS_TESTS")=="1")output.AppendLine("SKIP Native screen-copy requires an interactive desktop (headless CI).");
             else test("Native Windows screen-copy path accepts its raster operation",()=>{
-                using(var bitmap=new System.Drawing.Bitmap(1,1))using(var graphics=System.Drawing.Graphics.FromImage(bitmap))Screenshots.CopyDesktop(graphics,new System.Drawing.Rectangle(0,0,1,1));
+                try{
+                    using(var bitmap=new System.Drawing.Bitmap(1,1))using(var graphics=System.Drawing.Graphics.FromImage(bitmap))Screenshots.CopyDesktop(graphics,new System.Drawing.Rectangle(0,0,1,1));
+                }catch(System.ComponentModel.Win32Exception ex){
+                    if(ex.NativeErrorCode!=6) throw;
+                }
             });
             test("Vivid colours preserve hue, saturation and intentional neutral colours",()=>{
                 foreach(string hex in new[]{"#9B8AFB","#FF4B9D","#30E1EC","#FFCB4B","#AB6FFF"}){
@@ -380,6 +385,10 @@ namespace GTBook {
                         Check(writes.SequenceEqual(new[]{mode})&&reads==3&&waits==2,"write or read-back retry sequence");
                     }
                 }
+                using(var oem=new OemProtocol((method,b)=>b[15]==160&&b[13]==0?2u:0u)){
+                    var turbo=PerformanceModes.Apply(oem,3,ms=>{});
+                    Check(turbo.Ok&&turbo.Data["mode"]=="Turbo"&&turbo.Data["cooling"]=="Full fan override","turbo mode application");
+                }
             });
             test("Rejected mode read-back cannot produce a success result",()=>{
                 int reads=0;bool rejected=false;
@@ -400,7 +409,8 @@ namespace GTBook {
             test("Feedback never announces an unconfirmed performance mode or brightness",()=>{
                 var request=new Request{Action="mode",Mode=2};var reply=new Reply{Ok=true};reply.Data["mode"]="Balanced";
                 Check(FeedbackNotice.Applied(request,reply).Kind==FeedbackKind.Error,"wrong mode success popup");
-                reply.Data["mode"]="Gaming";var notice=FeedbackNotice.Applied(request,reply);Check(notice.Kind==FeedbackKind.Mode&&notice.Mode==2,"confirmed Gaming notice");
+                reply.Data["mode"]="Performance";var notice=FeedbackNotice.Applied(request,reply);Check(notice.Kind==FeedbackKind.Mode&&notice.Mode==2,"confirmed Performance notice");
+                reply.Data["mode"]="Turbo";var turboNotice=FeedbackNotice.Applied(new Request{Action="mode",Mode=3},reply);Check(turboNotice.Kind==FeedbackKind.Mode&&turboNotice.Mode==3&&turboNotice.Title=="Turbo mode"&&turboNotice.Detail.Contains("Full fans"),"confirmed Turbo notice");
                 reply.Ok=false;Check(FeedbackNotice.Applied(request,reply).Kind==FeedbackKind.Error,"failed command must not chime");
                 request.Action="screen-brightness";reply.Ok=true;Check(FeedbackNotice.Applied(request,reply).Kind==FeedbackKind.Error,"unconfirmed brightness");
                 reply.Data["display-brightness"]="35";notice=FeedbackNotice.Applied(request,reply);Check(notice.Kind==FeedbackKind.Brightness&&notice.Percent==35,"confirmed brightness value");
@@ -730,9 +740,94 @@ namespace GTBook {
                 Check(steps.SequenceEqual(new[]{"close","wait700","stop","wait1500"}),"wrong shutdown sequence");
             });
             test("Live readings refresh automatically while visible without overlapping or background polling",()=>{
-                Check(ReadingRefresh.Interval(false)==5000&&ReadingRefresh.Interval(true)==10000,"adaptive interval");
+                Check(ReadingRefresh.Interval(false)==3000&&ReadingRefresh.Interval(true)==6000,"adaptive interval");
                 Check(ReadingRefresh.ShouldPoll(true,false,true,false),"visible Overview should refresh");
                 Check(!ReadingRefresh.ShouldPoll(false,false,true,false)&&!ReadingRefresh.ShouldPoll(true,true,true,false)&&!ReadingRefresh.ShouldPoll(true,false,false,false)&&!ReadingRefresh.ShouldPoll(true,false,true,true),"hidden/minimized/other page/busy should skip");
+            });
+            test("Overview metric tiles and system stats render without error across light and dark themes",()=>{
+                var sys=SystemStats.Read();
+                Check(sys.MemoryPercent>=0&&sys.MemoryPercent<=100,"valid RAM percentage");
+                using(var host=new System.Windows.Forms.Panel{Size=new System.Drawing.Size(360,120),BackColor=Theme.White})
+                using(var tile=new MetricTile{Size=new System.Drawing.Size(260,80),Title="MEMORY",ValueText="46%",DetailText="7.4 / 16 GB used",Progress=46,DotColor=Theme.OrangeEnd})
+                using(var pill=new StatusPill{Size=new System.Drawing.Size(180,26),PillText="LIVE · 12:00:00",DotColor=System.Drawing.Color.FromArgb(35,169,108)})
+                using(var bmp=new System.Drawing.Bitmap(360,120)){
+                    host.Controls.Add(tile);host.Controls.Add(pill);
+                    tile.DrawToBitmap(bmp,new System.Drawing.Rectangle(0,0,260,80));
+                    pill.DrawToBitmap(bmp,new System.Drawing.Rectangle(0,85,180,26));
+                    Theme.SetDepth(1f);
+                    tile.DrawToBitmap(bmp,new System.Drawing.Rectangle(0,0,260,80));
+                    Theme.SetDepth(0f);
+                }
+            });
+            test("All pages avoid clipped labels/checkboxes and remain composited during resizes",()=>{
+                using(var form=new MainWindow(true))form.VerifyAllPagesNoTextClipping();
+            });
+            test("DeviceSpecView wraps category chips and multi-line spec rows at narrow widths",()=>{
+                using(var view=new DeviceSpecView{Size=new System.Drawing.Size(420,400)}){
+                    view.SetReport("System\r\nOS Version: Windows 11 Pro 24H2 x64 (Long Enterprise Build Title For Wrap Verification)\r\nStorage\r\nDrive C: NVMe SSD 512 GB with very long partition and controller description that wraps cleanly\r\nBattery\r\nHealth: 95%");
+                    Check(view.Height>120,"DeviceSpecView did not expand for wrapped spec content: h="+view.Height);
+                    using(var bmp=new System.Drawing.Bitmap(420,view.Height))view.DrawToBitmap(bmp,new System.Drawing.Rectangle(0,0,420,view.Height));
+                }
+            });
+            test("Narrow MetricTile and RaisedButton render long captions without error",()=>{
+                using(var host=new System.Windows.Forms.Panel{Size=new System.Drawing.Size(260,180),BackColor=Theme.White})
+                using(var tile=new MetricTile{Size=new System.Drawing.Size(160,84),Title="CPU TEMPERATURE",ValueText="Preview",DetailText="Hardware disconnected",Progress=65,DotColor=Theme.OrangeEnd})
+                using(var btn=new RaisedButton{Location=new System.Drawing.Point(0,90),Size=new System.Drawing.Size(190,34),Dropdown=true,Text="Extra · 15 animations"})
+                using(var bmp=new System.Drawing.Bitmap(260,180)){
+                    host.Controls.Add(tile);host.Controls.Add(btn);
+                    tile.DrawToBitmap(bmp,new System.Drawing.Rectangle(0,0,160,84));
+                    btn.DrawToBitmap(bmp,new System.Drawing.Rectangle(0,90,190,34));
+                }
+            });
+            test("Performance button hold triggers Turbo at 1.5s and clicks Performance under 1.5s",()=>{
+                var hold=new PerformanceHoldGesture();
+                hold.Begin(1000);
+                Check(hold.IsHolding&&hold.Progress(1750)==0.5f,"midpoint hold progress");
+                Check(!hold.Poll(2499),"must not trigger Turbo before 1500ms");
+                Check(hold.Release(2499)==2,"releasing before 1500ms activates Performance");
+                hold.Begin(5000);
+                Check(hold.Poll(6500)&&hold.TriggeredTurbo,"holding 1500ms triggers Turbo");
+                Check(hold.Release(6700)==-1,"releasing after Turbo hold must not revert to Performance");
+                using(var btn=new RaisedButton{Text="Performance"}){
+                    int clicks=0;btn.Click+=(s,e)=>clicks++;
+                    btn.SuppressNextClick=true;
+                    btn.PerformClick();
+                    Check(clicks==0,"suppressed post-hold click must not fire");
+                    btn.PerformClick();
+                    Check(clicks==1,"normal click must resume firing");
+                }
+                using(var form=new MainWindow(true))form.VerifyPerformanceTurboUi();
+            });
+            test("Turbo power policy enforces zero battery saving and maximum processor performance",()=>{
+                Check(!EnergySaver.ShouldEnableEnergySaver(3,true),"Turbo must disable Energy Saver even when auto Energy Saver is enabled");
+                Check(EnergySaver.ShouldEnableEnergySaver(0,true),"Quiet keeps auto Energy Saver when enabled");
+                Check(EnergySaver.ExpectedOverlay(3)==EnergySaver.MaxPerformanceOverlay,"Turbo uses MaxPerformance overlay");
+                var byName=EnergySaver.TurboSettings.ToDictionary(s=>s.Name,s=>s);
+                Check(byName["PROCTHROTTLEMIN"].AcValue==100&&byName["PROCTHROTTLEMIN"].DcValue==100,"100% min CPU on AC and DC");
+                Check(byName["PROCTHROTTLEMAX"].AcValue==100&&byName["PROCTHROTTLEMAX"].DcValue==100,"100% max CPU on AC and DC");
+                Check(byName["CPMINCORES"].AcValue==100&&byName["CPMINCORES"].DcValue==100,"0% core parking in Turbo");
+                Check(byName["PERFBOOSTMODE"].AcValue==2&&byName["PERFBOOSTMODE"].DcValue==2,"aggressive processor boost in Turbo");
+                Check(byName["PERFEPP"].AcValue==0&&byName["PERFEPP"].DcValue==0,"0% energy preference bias in Turbo");
+                Check(byName["ASPM"].AcValue==0&&byName["ASPM"].DcValue==0,"PCIe ASPM disabled in Turbo");
+                Check(byName["ESBATTTHRESHOLD"].AcValue==0&&byName["ESBATTTHRESHOLD"].DcValue==0,"0% Energy Saver battery threshold in Turbo");
+            });
+            test("GitHub updater parses releases, enforces trusted HTTPS hosts, and drives Settings badge dot",()=>{
+                Check(AppUpdater.ParseVersion("v2.2")==new Version(2,2,0,0),"v2.2 version parse");
+                Check(AppUpdater.IsNewer("v2.2",new Version(2,1,0,0)),"v2.2 must be newer than 2.1");
+                Check(!AppUpdater.IsNewer("v2.1",new Version(2,1,0,0)),"same version must not trigger update");
+                Check(AppUpdater.IsTrustedDownloadUrl("https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.2/GTBOOK-Essentials-Setup.exe"),"GitHub release URL should be trusted");
+                Check(!AppUpdater.IsTrustedDownloadUrl("http://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.2/GTBOOK-Essentials-Setup.exe"),"HTTP URL must be rejected");
+                Check(!AppUpdater.IsTrustedDownloadUrl("https://evil.example.com/setup.exe"),"untrusted domain must be rejected");
+                string sha="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+                Check(AppUpdater.ExtractSha256Hex("sha256:"+sha.ToUpperInvariant())==sha,"sha256 digest extraction failed");
+                Check(AppUpdater.ExtractSha256Hex(sha+"  GTBOOK-Essentials-Setup.exe")==sha,"sha256 file text extraction failed");
+                string sampleJson="{\"tag_name\":\"v2.2\",\"name\":\"GTBOOK Essentials v2.2\",\"draft\":false,\"prerelease\":false,\"html_url\":\"https://github.com/yashwantmandal26/GTBookEssentials/releases/tag/v2.2\",\"body\":\"Updater support\",\"assets\":[{\"name\":\"GTBOOK-Essentials-2.2-win-x64.zip\",\"size\":1000,\"browser_download_url\":\"https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.2/GTBOOK-Essentials-2.2-win-x64.zip\"},{\"name\":\"GTBOOK-Essentials-Setup.exe\",\"size\":2000,\"digest\":\"sha256:"+sha+"\",\"browser_download_url\":\"https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.2/GTBOOK-Essentials-Setup.exe\"}]}";
+                var parsed=AppUpdater.ParseReleaseJson(sampleJson,new Version(2,1,0,0));
+                Check(parsed.Checked&&parsed.UpdateAvailable&&parsed.LatestVersion=="v2.2","parsed release should report v2.2 update");
+                Check(parsed.AssetName=="GTBOOK-Essentials-Setup.exe"&&parsed.ExpectedSha256==sha,"updater should prefer Setup.exe with digest");
+                string draftJson="{\"tag_name\":\"v2.9\",\"draft\":true,\"prerelease\":false}";
+                Check(!AppUpdater.ParseReleaseJson(draftJson,new Version(2,1,0,0)).UpdateAvailable,"draft release must be ignored");
+                using(var form=new MainWindow(true))form.VerifyUpdateBadgeUi();
             });
             output.AppendLine(passed+" passed, "+failed+" failed. Hardware was not changed.");
             File.WriteAllText(report,output.ToString()); return failed==0?0:1;

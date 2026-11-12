@@ -12,22 +12,34 @@ namespace GTBook {
     public sealed class FeedbackNotice {
         public FeedbackKind Kind;
         public string Title="",Detail="";
-        public int Percent=-1,Mode=-1;
+        public int Percent=-1,Mode=-1,RequestedMode=-1;
         public Color[] Zones;
         public bool IsPending;
-        public string ControlLabel{get{return Kind==FeedbackKind.Brightness?"Screen brightness":Kind==FeedbackKind.KeyboardBrightness?"Keyboard brightness":"";}}
+        private string customControlLabel;
+        public string ControlLabel{
+            get{
+                if(!string.IsNullOrEmpty(customControlLabel))return customControlLabel;
+                return Kind==FeedbackKind.Brightness?"Screen brightness":Kind==FeedbackKind.KeyboardBrightness?"Keyboard brightness":"";
+            }
+            set{customControlLabel=value;}
+        }
         public static FeedbackNotice Pending(Request request){
-            if(request.Action=="mode")return new FeedbackNotice{Kind=FeedbackKind.Mode,Title=PerformanceModes.Names[request.Mode]+" mode",Detail="",Mode=-1,IsPending=true};
+            if(request.Action=="mode")return new FeedbackNotice{Kind=FeedbackKind.Mode,Title=PerformanceModes.Names[request.Mode]+" mode",Detail=request.Mode==3?"Ultimate Performance · Full fans ON":"",Mode=-1,RequestedMode=request.Mode,IsPending=true};
             if(request.Action=="screen-brightness")return new FeedbackNotice{Kind=FeedbackKind.Brightness,Title="Screen brightness",Detail="",IsPending=true};
+            if(request.Action=="rear-off"||request.Action=="rear"||request.Action=="rear-music"){
+                var rn=new FeedbackNotice{Kind=FeedbackKind.KeyboardBrightness,Title=request.Action=="rear-off"||request.Brightness==0?"Off":request.Brightness+"%",Percent=request.Brightness,IsPending=true};
+                rn.ControlLabel="Rear light bar";
+                return rn;
+            }
             if(request.Action=="auto"||request.Action=="fan"||request.Action=="usb")return new FeedbackNotice{Title=request.Action=="usb"?"USB charging "+(request.Enabled?"ON":"OFF"):request.Action=="auto"?"Automatic cooling":"Maximum fans",Detail="",IsPending=true};
             var notice=Applied(request,new Reply{Ok=true});notice.IsPending=true;notice.Detail="";return notice;
         }
         public static FeedbackNotice Applied(Request r,Reply reply){
             if(!reply.Ok)return new FeedbackNotice{Kind=FeedbackKind.Error,Title="Couldn't apply that",Detail=reply.Message};
             if(r.Action=="mode"){
-                string[] names={"Quiet","Balanced","Gaming"};
-                if(r.Mode<0||r.Mode>2||!reply.Data.ContainsKey("mode")||reply.Data["mode"]!=names[r.Mode])return new FeedbackNotice{Kind=FeedbackKind.Error,Title="Mode not confirmed",Detail="Refresh readings and try again."};
-                return new FeedbackNotice{Kind=FeedbackKind.Mode,Mode=r.Mode,Title=names[r.Mode]+" mode",Detail=""};
+                string[] names={"Quiet","Balanced","Performance","Turbo"};
+                if(r.Mode<0||r.Mode>3||!reply.Data.ContainsKey("mode")||reply.Data["mode"]!=names[r.Mode])return new FeedbackNotice{Kind=FeedbackKind.Error,Title="Mode not confirmed",Detail="Wait a moment for live sync, then try again."};
+                return new FeedbackNotice{Kind=FeedbackKind.Mode,Mode=r.Mode,Title=names[r.Mode]+" mode",Detail=r.Mode==3?"Ultimate Performance · Full fans ON":""};
             }
             if(r.Action=="screen-brightness"){
                 int percent;if(!reply.Data.ContainsKey("display-brightness")||!int.TryParse(reply.Data["display-brightness"],out percent)||percent<0||percent>100)return new FeedbackNotice{Kind=FeedbackKind.Error,Title="Brightness not confirmed",Detail=reply.Message};
@@ -38,14 +50,24 @@ namespace GTBook {
                 bool brightness=r.Feedback=="keyboard-brightness";
                 return new FeedbackNotice{Kind=brightness?FeedbackKind.KeyboardBrightness:FeedbackKind.Keyboard,Title=brightness?(r.Brightness==0?"Off":r.Brightness+"%"):r.Effect,Detail="",Percent=r.Brightness,Zones=zones};
             }
+            if(r.Action=="rear-off"){
+                var rn=new FeedbackNotice{Kind=FeedbackKind.KeyboardBrightness,Title="Off",Percent=0};
+                rn.ControlLabel="Rear light bar";
+                return rn;
+            }
+            if(r.Action=="rear"||r.Action=="rear-music"){
+                var rn=new FeedbackNotice{Kind=FeedbackKind.KeyboardBrightness,Title=(r.Brightness==0?"Off":r.Brightness+"%"),Percent=r.Brightness};
+                rn.ControlLabel="Rear light bar";
+                return rn;
+            }
             return new FeedbackNotice{Title="All set"};
         }
     }
     public sealed class ModeChime : IDisposable {
-        readonly SoundPlayer[] players=new SoundPlayer[3];readonly MemoryStream[] streams=new MemoryStream[3];
-        public ModeChime(){for(int i=0;i<3;i++){streams[i]=new MemoryStream(Wave(i),false);players[i]=new SoundPlayer(streams[i]);}}
+        readonly SoundPlayer[] players=new SoundPlayer[4];readonly MemoryStream[] streams=new MemoryStream[4];
+        public ModeChime(){for(int i=0;i<4;i++){streams[i]=new MemoryStream(Wave(i),false);players[i]=new SoundPlayer(streams[i]);}}
         public static byte[] Wave(int mode){
-            if(mode<0||mode>2)throw new ArgumentException("Unknown performance mode.");
+            if(mode<0||mode>3)throw new ArgumentException("Unknown performance mode.");
             const int rate=22050;int count=(int)(rate*.30);var data=new MemoryStream();
             using(var writer=new BinaryWriter(data,Encoding.ASCII,true)){
                 writer.Write(Encoding.ASCII.GetBytes("RIFF"));writer.Write(36+count*2);writer.Write(Encoding.ASCII.GetBytes("WAVEfmt "));writer.Write(16);writer.Write((short)1);writer.Write((short)1);writer.Write(rate);writer.Write(rate*2);writer.Write((short)2);writer.Write((short)16);writer.Write(Encoding.ASCII.GetBytes("data"));writer.Write(count*2);
@@ -57,7 +79,7 @@ namespace GTBook {
                 }
             }return data.ToArray();
         }
-        public void Play(int mode){try{foreach(var player in players)player.Stop();players[mode].Play();}catch(Exception e){Store.Log("Mode chime: "+e.Message);}}
+        public void Play(int mode){try{if(mode>=0&&mode<players.Length){foreach(var player in players)player.Stop();players[mode].Play();}}catch(Exception e){Store.Log("Mode chime: "+e.Message);}}
         public void Dispose(){foreach(var player in players){player.Stop();player.Dispose();}foreach(var stream in streams)stream.Dispose();}
     }
     public sealed class ShortcutToast : Form {
@@ -100,7 +122,7 @@ namespace GTBook {
             var outer=new RectangleF(.5f*s,.5f*s,Width-s,Height-s);
             using(var path=Theme.Round(outer,23*s))using(var border=new LinearGradientBrush(outer,Color.FromArgb(255,181,45),Color.FromArgb(255,83,18),35f))g.FillPath(border,path);
             var inner=outer;inner.Inflate(-3*s,-3*s);using(var path=Theme.Round(inner,20*s))using(var fill=new SolidBrush(Theme.White))g.FillPath(fill,path);
-            var tile=new RectangleF(19*s,20*s,54*s,54*s);using(var path=Theme.Round(tile,16*s))using(var fill=new SolidBrush(Color.FromArgb(255,241,221)))g.FillPath(fill,path);
+            var tile=new RectangleF(19*s,20*s,54*s,54*s);using(var path=Theme.Round(tile,16*s))using(var fill=new SolidBrush(Theme.Pearl))g.FillPath(fill,path);
             DrawIcon(g,new RectangleF(31*s,32*s,30*s,30*s),s);
             bool keyboard=notice.Kind==FeedbackKind.Keyboard||notice.Kind==FeedbackKind.KeyboardBrightness;
             bool screen=notice.Kind==FeedbackKind.Brightness;
@@ -119,10 +141,11 @@ namespace GTBook {
             }
             float y=120*s;
             if(notice.Kind==FeedbackKind.Mode){
-                string[] names={"Quiet","Balanced","Gaming"};float cell=(Width-40*s)/3;
-                for(int i=0;i<3;i++){
-                    var pill=new RectangleF(20*s+i*cell,y,cell-7*s,27*s);bool selected=notice.Mode==i;
-                    using(var path=Theme.Round(pill,10*s))using(var brush=new SolidBrush(selected?Color.FromArgb(255,119,22):Theme.Pearl))g.FillPath(brush,path);
+                string[] names={"Quiet","Balanced","Performance","Turbo"};float cell=(Width-40*s)/4;
+                for(int i=0;i<4;i++){
+                    var pill=new RectangleF(20*s+i*cell,y,cell-6*s,27*s);bool selected=notice.Mode==i||(notice.IsPending&&notice.RequestedMode==i);
+                    Color color = selected ? (i == 3 ? Color.FromArgb(255, 60, 20) : Color.FromArgb(255, 119, 22)) : Theme.Pearl;
+                    using(var path=Theme.Round(pill,10*s))using(var brush=new SolidBrush(color))g.FillPath(brush,path);
                 }
             }else if(notice.Kind==FeedbackKind.Keyboard&&notice.Zones!=null){
                 float cell=(Width-44*s)/4;for(int z=0;z<4;z++)for(int row=0;row<2;row++){
@@ -150,15 +173,15 @@ namespace GTBook {
             var outer=new RectangleF(.5f*d,.5f*d,Width-d,Height-d);
             using(var path=Theme.Round(outer,15*d))using(var border=new LinearGradientBrush(outer,Color.FromArgb(255,204,143),Color.FromArgb(244,119,42),30f))g.FillPath(border,path);
             var inner=outer;inner.Inflate(-1.5f*d,-1.5f*d);
-            using(var path=Theme.Round(inner,13.5f*d))using(var fill=new LinearGradientBrush(inner,Theme.White,Color.FromArgb(255,249,241),80f))g.FillPath(fill,path);
+            using(var path=Theme.Round(inner,13.5f*d))using(var fill=new LinearGradientBrush(inner,Theme.White,Theme.Ivory,80f))g.FillPath(fill,path);
             var layout=BrightnessLayout(ClientSize,d);
-            using(var path=Theme.Round(layout[0],12*d))using(var fill=new LinearGradientBrush(layout[0],Color.FromArgb(255,241,219),Color.FromArgb(255,226,188),60f))g.FillPath(fill,path);
+            using(var path=Theme.Round(layout[0],12*d))using(var fill=new LinearGradientBrush(layout[0],Theme.White,Theme.Pearl,60f))g.FillPath(fill,path);
             DrawIcon(g,new RectangleF(21*d,25*d,24*d,24*d),.8f*d);
             TextAt(g,notice.ControlLabel.Replace(" ","\n"),9.5f/VisualScale,FontStyle.Bold,layout[1],Theme.Muted,TextFormatFlags.WordBreak|TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter);
             string value=notice.Percent<0?"…":notice.Kind==FeedbackKind.KeyboardBrightness&&notice.Percent==0?"Off":notice.Percent+"%";
             if(brightnessFontDpi!=DeviceDpi||brightnessFontClient!=ClientSize){brightnessFontSize=BrightnessValueSize(g,"100%",layout[2]);brightnessFontDpi=DeviceDpi;brightnessFontClient=ClientSize;}
             TextAt(g,value,brightnessFontSize/VisualScale,FontStyle.Bold,layout[2],Theme.Ink,TextFormatFlags.SingleLine|TextFormatFlags.NoPadding|TextFormatFlags.Right|TextFormatFlags.VerticalCenter);
-            var track=layout[3];using(var path=Theme.Round(track,3.5f*d))using(var fill=new SolidBrush(Color.FromArgb(244,232,218)))g.FillPath(fill,path);
+            var track=layout[3];using(var path=Theme.Round(track,3.5f*d))using(var fill=new SolidBrush(Theme.Pearl))g.FillPath(fill,path);
             track.Width*=(float)Math.Max(0,Math.Min(100,motion.Percent(elapsed.Elapsed.TotalMilliseconds)))/100f;
             if(track.Width>0)using(var path=Theme.Round(track,3.5f*d))using(var fill=new LinearGradientBrush(track,Color.FromArgb(255,184,75),Color.FromArgb(246,113,32),0f))g.FillPath(fill,path);
         }
@@ -166,6 +189,7 @@ namespace GTBook {
             using(var pen=new Pen(Color.FromArgb(214,88,15),2.4f*scale)){
                 pen.StartCap=pen.EndCap=LineCap.Round;
                 if(notice.Kind==FeedbackKind.Brightness){g.DrawEllipse(pen,r.X+8*scale,r.Y+8*scale,14*scale,14*scale);for(int i=0;i<8;i++){double a=i*Math.PI/4;g.DrawLine(pen,r.X+15*scale+(float)Math.Cos(a)*12*scale,r.Y+15*scale+(float)Math.Sin(a)*12*scale,r.X+15*scale+(float)Math.Cos(a)*15*scale,r.Y+15*scale+(float)Math.Sin(a)*15*scale);}}
+                else if(notice.ControlLabel=="Rear light bar"){var barRect=new RectangleF(r.X+2*scale,r.Y+10*scale,r.Width-4*scale,10*scale);using(var p=Theme.Round(barRect,4*scale)) g.DrawPath(pen,p);g.DrawLine(pen,r.X+7*scale,r.Y+15*scale,r.Right-7*scale,r.Y+15*scale);}
                 else if(notice.Kind==FeedbackKind.Keyboard||notice.Kind==FeedbackKind.KeyboardBrightness){g.DrawRectangle(pen,r.X,r.Y+4*scale,r.Width,r.Height-8*scale);for(int i=0;i<4;i++)g.DrawLine(pen,r.X+(5+i*6)*scale,r.Y+10*scale,r.X+(5+i*6)*scale,r.Y+16*scale);g.DrawLine(pen,r.X+7*scale,r.Y+22*scale,r.Right-7*scale,r.Y+22*scale);}
                 else if(notice.Kind==FeedbackKind.Mode&&notice.Mode==0){g.DrawArc(pen,r,55,285);g.DrawArc(pen,new RectangleF(r.X+9*scale,r.Y-4*scale,r.Width-3*scale,r.Height-3*scale),75,185);}
                 else if(notice.Kind==FeedbackKind.Mode&&notice.Mode==1){for(int i=0;i<3;i++){float x=r.X+(4+i*11)*scale;g.DrawLine(pen,x,r.Top,x,r.Bottom);g.FillEllipse(Brushes.White,x-3*scale,r.Y+(i%2==0?7:18)*scale,6*scale,6*scale);g.DrawEllipse(pen,x-3*scale,r.Y+(i%2==0?7:18)*scale,6*scale,6*scale);}}
@@ -178,7 +202,7 @@ namespace GTBook {
             Directory.CreateDirectory(directory);using(var toast=new ShortcutToast(true)){
                 toast.Location=new Point(-32000,-32000);toast.Show();toast.timer.Stop();toast.Opacity=1;
                 for(int i=0;i<11;i++){
-                    Request r=i<3?new Request{Action="mode",Mode=i}:new Request{Action=i==3?"screen-brightness":"keyboard",Effect=i==5?"Clock":"Rainbow",Brightness=i==5?50:i==6?0:100};var reply=new Reply{Ok=true};if(i<3)reply.Data["mode"]=new[]{"Quiet","Balanced","Gaming"}[i];else reply.Data["display-brightness"]="70";
+                    Request r=i<3?new Request{Action="mode",Mode=i}:new Request{Action=i==3?"screen-brightness":"keyboard",Effect=i==5?"Clock":"Rainbow",Brightness=i==5?50:i==6?0:100};var reply=new Reply{Ok=true};if(i<3)reply.Data["mode"]=new[]{"Quiet","Balanced","Performance"}[i];else reply.Data["display-brightness"]="70";
                     if(i==5||i==6)r.Feedback="keyboard-brightness";if(i==7)r.Effect="Magnetic Slingshot";if(i==8)r.Effect="Orbital Eclipse";
                     if(i==9){r.Action="mode";r.Mode=2;}if(i==10)r.Feedback="keyboard-brightness";
                     toast.notice=i>=9?FeedbackNotice.Pending(r):FeedbackNotice.Applied(r,reply);toast.motion.Update(toast.elapsed.Elapsed.TotalMilliseconds,false,toast.notice.Percent);using(var image=new Bitmap(toast.Width,toast.Height)){toast.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));image.Save(Path.Combine(directory,"Toast-"+i+".png"));}

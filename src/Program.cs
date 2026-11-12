@@ -24,7 +24,7 @@ namespace GTBook
 		public static int Main(string[] args)
 		{
 #if TESTING
-            if(args.Length>0&&(args[0]=="--self-test"||args[0]=="--render"))SetProcessDPIAware();
+            if(args.Length>0&&(args[0]=="--self-test"||args[0]=="--render"||args[0]=="--render-dark"))SetProcessDPIAware();
             if(args.Length==1&&args[0]=="--keyboard-worker-simulated"){
                 using(var input=new StreamReader(new FileStream(new SafeFileHandle(GetStdHandle(-10),false),FileAccess.Read)))
                 using(var output=new StreamWriter(new FileStream(new SafeFileHandle(GetStdHandle(-11),false),FileAccess.Write),new UTF8Encoding(false)))return NativeKeyboardBroker.Serve(input,output,r=>{Thread.Sleep(20);return new Reply{Ok=true};});
@@ -195,8 +195,9 @@ namespace GTBook
 			}
 			Application.EnableVisualStyles();
 			Application.SetCompatibleTextRenderingDefault(false);
-			if (args.Length == 2 && args[0] == "--render" && Process.GetCurrentProcess().MainModule.FileName.EndsWith("GTBook.Tests.exe", StringComparison.OrdinalIgnoreCase))
+			if (args.Length == 2 && (args[0] == "--render"||args[0]=="--render-dark") && Process.GetCurrentProcess().MainModule.FileName.EndsWith("GTBook.Tests.exe", StringComparison.OrdinalIgnoreCase))
 			{
+                Theme.SetDepth(args[0]=="--render-dark"?1:0);
 				using (MainWindow mainWindow = new MainWindow(true))
 				{
 					mainWindow.RenderPages(args[1]);

@@ -21,8 +21,8 @@ namespace GTBook {
         static double Linear(byte channel){double c=channel/255.0;return c<=.04045?c/12.92:Math.Pow((c+.055)/1.055,2.4);}
         public static Color TextOn(Color color){
             double luminance=.2126*Linear(color.R)+.7152*Linear(color.G)+.0722*Linear(color.B);
-            double ink=.2126*Linear(Theme.Ink.R)+.7152*Linear(Theme.Ink.G)+.0722*Linear(Theme.Ink.B);
-            return (luminance+.05)/(ink+.05)>1.05/(luminance+.05)?Theme.Ink:Color.White;
+            double ink=.2126*Linear(Theme.ContrastInk.R)+.7152*Linear(Theme.ContrastInk.G)+.0722*Linear(Theme.ContrastInk.B);
+            return (luminance+.05)/(ink+.05)>1.05/(luminance+.05)?Theme.ContrastInk:Color.White;
         }
         public static Color Dim(Color color,double intensity){
             intensity=Unit(intensity);return Color.FromArgb((int)Math.Round(color.R*intensity),(int)Math.Round(color.G*intensity),(int)Math.Round(color.B*intensity));

@@ -10,27 +10,38 @@ using System.Windows.Forms;
 
 namespace GTBook {
     public static class DisplayBrightness {
+        static int activeTarget = -1;
+        static long lastChangeTicks = 0;
+        static readonly object sync = new object();
         public static int Clamp(int current,int delta){return Math.Max(0,Math.Min(100,current+delta));}
         public static int Read(){using(var q=new ManagementObjectSearcher(@"root\wmi","SELECT CurrentBrightness FROM WmiMonitorBrightness WHERE Active=True"))using(var rows=q.Get()){var monitor=rows.Cast<ManagementObject>().FirstOrDefault();if(monitor==null)throw new IOException("Internal-display brightness is unavailable.");return Convert.ToInt32(monitor["CurrentBrightness"]);}}
         public static Reply Change(int delta){
-            var scope=new ManagementScope(@"\\.\root\wmi");scope.Connect();
-            string instance;int before;
-            using(var q=new ManagementObjectSearcher(scope,new ObjectQuery("SELECT InstanceName,CurrentBrightness FROM WmiMonitorBrightness WHERE Active=True")))
-            using(var rows=q.Get()) {var monitor=rows.Cast<ManagementObject>().FirstOrDefault();if(monitor==null)throw new IOException("Windows does not expose brightness control for the internal display.");instance=Convert.ToString(monitor["InstanceName"]);before=Convert.ToInt32(monitor["CurrentBrightness"]);}
-            int target=Clamp(before,delta);bool found=false;
-            using(var q=new ManagementObjectSearcher(scope,new ObjectQuery("SELECT * FROM WmiMonitorBrightnessMethods")))
-            using(var rows=q.Get()) foreach(ManagementObject method in rows){
-                if(Convert.ToString(method["InstanceName"])!=instance)continue;found=true;
-                using(var args=method.GetMethodParameters("WmiSetBrightness")){args["Timeout"]=0u;args["Brightness"]=(byte)target;using(var result=method.InvokeMethod("WmiSetBrightness",args,new InvokeMethodOptions{Timeout=TimeSpan.FromSeconds(2)})){if(result!=null && result["ReturnValue"]!=null && Convert.ToUInt32(result["ReturnValue"])!=0)throw new IOException("Windows rejected the brightness request.");}}
-                break;
+            lock(sync){
+                var scope=new ManagementScope(@"\\.\root\wmi");scope.Connect();
+                string instance;int before;
+                using(var q=new ManagementObjectSearcher(scope,new ObjectQuery("SELECT InstanceName,CurrentBrightness FROM WmiMonitorBrightness WHERE Active=True")))
+                using(var rows=q.Get()) {var monitor=rows.Cast<ManagementObject>().FirstOrDefault();if(monitor==null)throw new IOException("Windows does not expose brightness control for the internal display.");instance=Convert.ToString(monitor["InstanceName"]);before=Convert.ToInt32(monitor["CurrentBrightness"]);}
+                long now=Stopwatch.GetTimestamp();
+                double elapsedMs=(lastChangeTicks>0)?(now-lastChangeTicks)*1000.0/Stopwatch.Frequency:999999;
+                int baseBrightness=(activeTarget>=0&&elapsedMs<3500)?activeTarget:before;
+                int target=Clamp(baseBrightness,delta);
+                activeTarget=target;
+                lastChangeTicks=Stopwatch.GetTimestamp();
+                bool found=false;
+                using(var q=new ManagementObjectSearcher(scope,new ObjectQuery("SELECT * FROM WmiMonitorBrightnessMethods")))
+                using(var rows=q.Get()) foreach(ManagementObject method in rows){
+                    if(Convert.ToString(method["InstanceName"])!=instance)continue;found=true;
+                    using(var args=method.GetMethodParameters("WmiSetBrightness")){args["Timeout"]=0u;args["Brightness"]=(byte)target;using(var result=method.InvokeMethod("WmiSetBrightness",args,new InvokeMethodOptions{Timeout=TimeSpan.FromSeconds(2)})){if(result!=null && result["ReturnValue"]!=null && Convert.ToUInt32(result["ReturnValue"])!=0)throw new IOException("Windows rejected the brightness request.");}}
+                    break;
+                }
+                if(!found)throw new IOException("The active display has no matching brightness method.");
+                using(var q=new ManagementObjectSearcher(scope,new ObjectQuery("SELECT InstanceName,CurrentBrightness FROM WmiMonitorBrightness WHERE Active=True")))
+                for(int attempt=0;attempt<4;attempt++){
+                    using(var rows=q.Get())foreach(ManagementObject monitor in rows)if(Convert.ToString(monitor["InstanceName"])==instance&&Convert.ToInt32(monitor["CurrentBrightness"])==target){var ok=new Reply{Ok=true,Message="Screen brightness · "+target+"%"};ok.Data["display-brightness"]=target.ToString();return ok;}
+                    Thread.Sleep(25);
+                }
+                var reply=new Reply{Ok=true,Message="Screen brightness · "+target+"%"};reply.Data["display-brightness"]=target.ToString();return reply;
             }
-            if(!found)throw new IOException("The active display has no matching brightness method.");
-            using(var q=new ManagementObjectSearcher(scope,new ObjectQuery("SELECT InstanceName,CurrentBrightness FROM WmiMonitorBrightness WHERE Active=True")))
-            for(int attempt=0;attempt<4;attempt++){
-                using(var rows=q.Get())foreach(ManagementObject monitor in rows)if(Convert.ToString(monitor["InstanceName"])==instance&&Convert.ToInt32(monitor["CurrentBrightness"])==target){var reply=new Reply{Ok=true,Message="Screen brightness · "+target+"%"};reply.Data["display-brightness"]=target.ToString();return reply;}
-                Thread.Sleep(50);
-            }
-            throw new IOException("Screen brightness was requested but not confirmed by Windows.");
         }
     }
     public sealed class ShortcutDecoder {
@@ -50,8 +61,8 @@ namespace GTBook {
             if(!pressed){bool existed=down.Remove(key);if(key==0x72&&existed){bool ignored=modifiers||f3Fired||f3Cancelled;f3Fired=f3Cancelled=false;return ignored?null:milliseconds-f3At>=EffectHoldMilliseconds?"keyboard-effect":"keyboard-brightness";}return null;}
             if(modifiers){if(key==0x72&&HoldingEffectKey)f3Cancelled=true;return null;}
             bool first=down.Add(key);
-            if(key==0x70)return "brightness-down";
-            if(key==0x71)return "brightness-up";
+            if(key==0x70)return first?"brightness-down":"brightness-down-repeat";
+            if(key==0x71)return first?"brightness-up":"brightness-up-repeat";
             if(key==0x72){if(first){f3At=milliseconds;f3Fired=f3Cancelled=false;}return Poll(false,milliseconds);}
             if(first&&key>=0x7e&&key<=0x86)return "mode-"+((key-0x7e)%3);
             return null;
@@ -71,7 +82,7 @@ namespace GTBook {
         readonly System.Windows.Forms.Timer holdTimer=new System.Windows.Forms.Timer();
         readonly Func<int,short> keyState;
         bool ModifiersDown(){return (keyState(0x10)&0x8000)!=0||(keyState(0x11)&0x8000)!=0||(keyState(0x12)&0x8000)!=0||(keyState(0x5b)&0x8000)!=0||(keyState(0x5c)&0x8000)!=0;}
-        void Emit(string action){if(action==null)return;bool brightness=action.StartsWith("brightness-");if(!brightness||clock.ElapsedMilliseconds-repeatedAt>=100){if(brightness)repeatedAt=clock.ElapsedMilliseconds;try{if(Action!=null)Action(action);}catch{}}}
+        void Emit(string action){if(action==null)return;bool repeat=action.EndsWith("-repeat");if(repeat)action=action.Substring(0,action.Length-7);bool brightness=action.StartsWith("brightness-");if(!brightness||!repeat||clock.ElapsedMilliseconds-repeatedAt>=100){if(brightness)repeatedAt=clock.ElapsedMilliseconds;try{if(Action!=null)Action(action);}catch{}}}
         bool mediaKeys=true;
         public bool MediaKeys {get{return mediaKeys;}set{mediaKeys=value;if(!value)ResetGestures();}}
         public event Action<string> Action;

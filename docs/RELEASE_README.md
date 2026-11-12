@@ -20,8 +20,10 @@ No Python, Node or separate .NET SDK needed. A ZIP + `Install.bat` alternative i
 
 ## What it does
 
+- Light and dark themes with a one-click animated switch below the logo. Raised buttons, shaded edges and layered cards add depth; the chosen theme is remembered.
+- Rear-bar controls with larger Apply/Off buttons, explicit preview/status badges, two-colour native effects and acknowledged music startup.
 - Quiet / Balanced / Gaming, automatic cooling / full fans, temperatures and system readings.
-- Official RGB plus **10 four-zone animations**, direction, live previews and independent rear-bar lighting.
+- Official RGB plus **15 four-zone animations**, direction, live previews and independent rear-bar lighting. New: Zoom Bloom, Meteor Shower, Starlight, Colour Cascade and Silk Flow.
 - GPU firmware requests, USB charging, screenshots, Windows-key lock and device specifications.
 - Window **X hides to tray**; tray **Exit** quits. Routine controls apply with one click.
 

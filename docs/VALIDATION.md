@@ -1,6 +1,34 @@
 # Release validation
 
-Candidate: 2.0.0-rc.15. Hardware profile: INFINIX GL613 / BIOS 1.00.
+Candidate: 2.1. Hardware profile: INFINIX GL613 / BIOS 1.00.
+
+## RC18 rear-bar reliability and controls
+
+- Rebuilt the rear card with 58-pixel action rows, a prominent orange Apply/Start music sync action, red-tinted Turn off, contextual Stop music and Check status. The effect and both colour controls share a responsive three-column layout; Colour 2 enables only for Loop/Cover and speed only for Breathing. Dark/light previews use a slim LED housing and readable OFF/ON/MUSIC/PREVIEW/UNKNOWN/STARTING badges.
+- Editing preserves the last acknowledged appearance unless Preview selected look is explicitly enabled. Unknown state uses an unlit simulation with an UNKNOWN badge; it is not reported as confirmed Off. Applying 0% now disables and verifies the rear power gate. Positive brightness has a minimum nonzero controller level within the existing 0–44 PWM range.
+- Turn off uses the reviewed power gate directly and does not depend on opening the UART. Power changes use bounded repeated read-back. Native and music writers share rear ownership. Packet composition for Loop/Cover has one implementation; fragmented acknowledgements are accepted and missing/invalid acknowledgements fail.
+- Music startup waits for a completed acknowledged frame rather than a delay. Power is verified first; startup failure/timeout cannot report active sync. The stream checks owner lifetime and stops if the app disappears. Replacing the rear effect or turning it off stops music first; unrelated keyboard, mode, fan and USB commands no longer stop it. Music preferences save after readiness. Stop music restores the acknowledged static colour while retaining any pending draft.
+- 106 software checks pass, including packet palettes/brightness endpoints, fragmented/rejected acknowledgements, delayed/mismatched gate reads, music readiness/cancellation/owner exit/write failure, draft isolation and contextual control geometry at 860/1080/1920 widths. The existing keyboard, theme and release checks remain passing.
+- Rear card renders were reviewed in both themes, including off state and all six effect previews. Physical appearance, native effect implementation and audio response of RC18 remain unverified on the device; tests simulate hardware responses and do not change LEDs. No claim of universal or bug-free operation follows from software checks.
+
+See [rear-bar controls and validation](REAR_LIGHTING.md).
+
+## RC17 animated light/dark themes
+
+- Added a single-click Dark mode switch below the sidebar logo, also operable with Space or Enter. The palette and switch thumb animate together over 320 ms; repeated clicks reverse from the current intermediate palette. The timer stops at the endpoint and is disposed with the window.
+- Dark mode uses charcoal/navy surfaces, bright text, warm orange selection accents, inset switch tracks, bevel highlights and deeper raised-button/card shadows. Light mode remains available. Keyboard colour swatches retain their actual colours and independent text contrast. Appearance changes send no hardware commands.
+- Existing pages, detached cached pages, open windows and new controls share the palette. Theme preference writes are queued in click order off the UI thread and restored on normal startup. Preview/test windows do not save the preference. Supported Windows versions receive a matching native title-bar appearance; native scrollbars and system dialogs retain their Windows styling.
+- 100 software checks pass, including continuous transition reversal, stopped animation timers, cached-page recolouring, light restoration, swatch preservation and dark text separation. All four pages were rendered in both themes at compact and wide sizes; dark overview, lighting and settings renders were visually inspected.
+- Reproduce layout previews with `tests/GTBook.Tests.exe --render out/theme-light` and `tests/GTBook.Tests.exe --render-dark out/theme-dark` after compiling the test runner. These previews do not change hardware.
+
+## RC16 vivid four-zone animations
+
+- Refined all ten existing Extra animations with layered waves, richer ember/tide palettes, more visible light-and-shadow depth, smoother palette stops and longer comet trails. Added Zoom Bloom, Meteor Shower, Starlight, Colour Cascade and Silk Flow; all five support the two chosen colours.
+- Every pattern retains a seamless six-second base loop, bounded speed and exact directional mirroring where applicable. Zoom Bloom, Magnetic Slingshot and Starlight show their actual motion instead of offering a misleading left/right setting. Palette effects continue to respect identical colours and intentional neutral colours.
+- The keyboard preview uses the same frame colours as HID output, with a charcoal keyboard bed and subtle zone glow. Its visible refresh now matches the existing 67 ms hardware schedule; hidden previews still stop. Hardware commands, HID packet format, stream frequency, ownership guards and live transitions are unchanged.
+- 98 software checks pass, including distinct patterns, zoom expansion/return symmetry, staggered twinkle peaks, custom palettes, loop closure at all speeds, saturation, direction, preview/packet agreement, checksums, stop/failure handling and live transitions. Maximum measured channel change at speed 9 and 67 ms is 87/255, below the existing 105/255 continuity limit.
+- Brand research and the four-zone adaptations are documented in [LIGHTING_EFFECTS.md](LIGHTING_EFFECTS.md). These are original software-rendered patterns inspired by documented effect families, not OEM implementations.
+- Physical LED appearance and long-session resource use of RC16 still require on-device observation. Software tests and layout renders do not validate physical appearance.
 
 ## RC15 refined brightness-card layout
 

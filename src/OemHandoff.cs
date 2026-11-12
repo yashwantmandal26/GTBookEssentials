@@ -36,7 +36,7 @@ namespace GTBook {
         }
     }
     public static class ReadingRefresh {
-        public static int Interval(bool battery){return battery?10000:5000;}
+        public static int Interval(bool battery){return battery?6000:3000;}
         public static bool ShouldPoll(bool visible,bool minimized,bool overview,bool busy){return visible&&!minimized&&overview&&!busy;}
     }
 }

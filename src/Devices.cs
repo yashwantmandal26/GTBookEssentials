@@ -5,6 +5,7 @@ using System.IO.Ports;
 using System.Management;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Threading;
 using Microsoft.Win32.SafeHandles;
 
 namespace GTBook {
@@ -29,8 +30,11 @@ namespace GTBook {
             port.DiscardInBuffer(); port.Write(packet, 0, packet.Length);
             // Require the four-byte controller acknowledgement. This proves receipt,
             // not that every lighting parameter is visually implemented by firmware.
+            ReadAcknowledgement(packet,(ack,offset,count)=>port.Read(ack,offset,count));
+        }
+        internal static void ReadAcknowledgement(byte[] packet,Func<byte[],int,int,int> read){
             byte[] ack = new byte[4]; int offset = 0;
-            while (offset < 4) offset += port.Read(ack, offset, 4-offset);
+            while(offset<4){int received=read(ack,offset,4-offset);if(received<=0||received>4-offset)throw new IOException("Incomplete rear controller acknowledgement.");offset+=received;}
             if (ack[0] != 0x34 || ack[1] != 0x0e || ack[2] != (packet[2] | 0x80) || ack[3] != (byte)((ack[0] + ack[1] + ack[2]) & 255)) throw new IOException("Rear controller returned an unexpected acknowledgement.");
         }
         public void Dispose() { port.Dispose(); }
@@ -74,8 +78,13 @@ namespace GTBook {
         }
         public void Send(byte[] packet) {
             uint written;
-            if (!WriteFile(handle, packet, (uint)packet.Length, out written, IntPtr.Zero)) throw new Win32Exception();
-            if (written != packet.Length) throw new IOException("Incomplete keyboard write. Some zones may have changed; retry after Refresh.");
+            for(int attempt=0;attempt<2;attempt++){
+                if (WriteFile(handle, packet, (uint)packet.Length, out written, IntPtr.Zero) && written == packet.Length) return;
+                if(attempt==0) Thread.Sleep(2);
+            }
+            int err = Marshal.GetLastWin32Error();
+            if (err != 0) throw new Win32Exception(err);
+            throw new IOException("Incomplete keyboard write. Some zones may have changed; retry after Refresh.");
         }
         public void Dispose() { if (handle != null) handle.Dispose(); }
     }

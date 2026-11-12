@@ -27,6 +27,7 @@ namespace GTBook {
         public bool KeepAwake;
         public string ZoneEffect="Static";
         public int Step;
+        public bool RestoreAutoCooling;
         public int OwnerProcessId;
         public long OwnerStartedTicks;
     }
@@ -47,7 +48,7 @@ namespace GTBook {
             Guid session;if(!string.IsNullOrEmpty(r.KeyboardSession)&&!Guid.TryParseExact(r.KeyboardSession,"N",out session))throw new ArgumentException("Invalid keyboard session.");
             if (!new[] { "probe", "device-info", "refresh", "mode", "auto", "fan", "usb", "gpu", "keyboard", "keyboard-animation", "rear", "rear-off", "rear-music", "screen-brightness" }.Contains(r.Action)) throw new ArgumentException("Unknown command.");
             if(r.Step < -100 || r.Step >100 || r.Action=="screen-brightness"&&r.Step==0)throw new ArgumentException("Invalid brightness step.");
-            if (r.Mode < 0 || r.Mode > 2) throw new ArgumentException("Unsupported power mode.");
+            if (r.Action == "mode" ? (r.Mode < 0 || r.Mode > 3) : (r.Mode < 0 || r.Mode > 2)) throw new ArgumentException("Unsupported power mode.");
             if (r.Brightness < 0 || r.Brightness > 100 || r.Speed < 1 || r.Speed > 9) throw new ArgumentException("Setting outside its valid range.");
             if (r.Colors == null || r.Colors.Length != 4) throw new ArgumentException("Four zone colours are required.");
             foreach (string c in r.Colors) Color(c);
@@ -82,7 +83,7 @@ namespace GTBook {
             byte[] rgb = Color(color), packet = new byte[17];
             packet[0] = 0x34; packet[1] = 0x0e; packet[2] = (byte)(Array.IndexOf(new[]{"Static","Breathing","Rhythm","Beat","Loop","Cover"},effect)+1);
             packet[3] = rgb[0]; packet[5] = rgb[1]; packet[7] = rgb[2];
-            packet[9] = (byte)speed; packet[10] = (byte)(brightness * 44 / 100);
+            packet[9] = (byte)speed; packet[10] = (byte)(brightness==0?0:Math.Max(1,brightness*44/100));
             return packet; // OEM PARAMS uses zero for the final byte, not a guessed checksum.
         }
     }
@@ -108,7 +109,7 @@ namespace GTBook {
         public void Dispose(){if(keyboard!=null){keyboard.Dispose();keyboard=null;}if(oem!=null){oem.Dispose();oem=null;}}
     }
     public static class Hardware {
-        static uint Telemetry(Func<uint> read){using(var lease=new HardwareLease()){if(!lease.Acquire(0))throw new IOException("Device busy; reading deferred.");try{return read();}finally{lease.Release();}}}
+        static uint Telemetry(Func<uint> read){using(var lease=new HardwareLease()){if(!lease.Acquire(300))throw new IOException("Device busy; reading deferred.");try{return read();}finally{lease.Release();}}}
         static readonly object conflictLock=new object();static readonly ConflictCache pythonCache=new ConflictCache();
         public static string Base { get { return AppDomain.CurrentDomain.BaseDirectory; } }
         public static string OemDirectory { get { return Path.GetFullPath(Path.Combine(Base, "..", "Official_ControlCenter")); } }
@@ -122,18 +123,19 @@ namespace GTBook {
                     string name;
                     try { name = p.ProcessName.ToLowerInvariant(); } catch (InvalidOperationException) { continue; }
                     if (new[] { "controlcenter", "infinixgttoolkit", "infinix toolkit", "infinixtoolkit", "infinixtoolkitfast" }.Contains(name)) return p.ProcessName + " is running. Close it from its tray before using hardware controls, then Refresh.";
-                    if(name=="python"||name=="pythonw"){try{python.Add(p.Id+":"+p.StartTime.ToUniversalTime().Ticks);}catch{return "A Python process cannot be inspected. Close other hardware utilities before retrying.";}}
+                    if(name=="python"||name=="pythonw"){try{python.Add(p.Id+":"+p.StartTime.ToUniversalTime().Ticks);}catch{}}
                 }
             }
             return pythonCache.Check(python,()=>{
+            try{
             using (var q = new ManagementObjectSearcher("SELECT CommandLine FROM Win32_Process WHERE Name = 'python.exe' OR Name = 'pythonw.exe'"))
             using (var rows = q.Get()) {
                 foreach (ManagementObject row in rows) {
                     string command = Convert.ToString(row["CommandLine"]).ToLowerInvariant();
-                    if (command.Length == 0) return "A Python process cannot be inspected. Close other hardware utilities before retrying.";
                     if (command.Contains("infinix_toolkit.py") || command.Contains("infinix_backlight.py")) return "The old Python toolkit is running. Close it before using hardware controls.";
                 }
             }
+            }catch{}
             return "";
             });
         }
@@ -181,6 +183,11 @@ namespace GTBook {
             if (r.Action == "mode") {
                 var confirmed=PerformanceModes.Apply(native,r.Mode,Thread.Sleep);
                 answer.Message=confirmed.Message;answer.Data["mode"]=confirmed.Data["mode"];
+                if(r.Mode==3){
+                    try{native.SetFanFullMode(true);answer.Data["cooling"]="Full fan override";}catch{}
+                }else if(r.RestoreAutoCooling){
+                    try{native.SetFanFullMode(false);answer.Data["cooling"]="Firmware auto";}catch{}
+                }
             } else if (r.Action == "auto" || r.Action=="fan") {
                 bool enabled=r.Action=="fan" && r.Enabled;
                 Call(oem, "SetFanFullMode", enabled);bool matched=false;
@@ -193,51 +200,71 @@ namespace GTBook {
             } else if(r.Action=="gpu") {
                 var gpu=GpuModes.Apply(native,r.Mode,Thread.Sleep);answer.Message=gpu.Message;foreach(var item in gpu.Data)answer.Data[item.Key]=item.Value;
             } else if (r.Action == "rear" || r.Action == "rear-off") {
-                // Find the OEM UART before changing its power gate.
-                string port = RearDevice.FindPort();
-                using (var rear = new RearDevice(port)) {
-                    if (r.Action == "rear-off") {
-                        rear.Send(Protocol.Rear("Static", "#000000", 0, 1));
-                        Call(oem, "BackLight", false);
-                        if (Call(oem, "getLight2") == 0) throw new IOException("Rear power-off read-back did not match.");
+                using(var ownership=new HardwareLease(@"Global\GTBookStableRear")){
+                    if(!ownership.Acquire(0))throw new IOException("Stop music sync before changing rear lighting.");
+                    if (r.Action == "rear-off"||r.Brightness==0) {
+                        RearLighting.Power(false,enabled=>native.BackLight(enabled),()=>native.getLight2()==0,Thread.Sleep);
+                        answer.Data["rear-power"]="Off";
                         answer.Message = "Rear power gate confirmed off.";
                     } else {
-                        Call(oem, "BackLight", true);
-                        if (Call(oem, "getLight2") != 0) throw new IOException("Rear power-on read-back did not match.");
-                        byte[] frame=Protocol.Rear(r.Effect, r.Colors[0], r.Brightness, r.Speed);
-                        if(r.Effect=="Loop" || r.Effect=="Cover") {byte[] second=Protocol.Color(r.Colors[1]);Array.Copy(second,0,frame,12,3);frame[15]=(byte)(r.Brightness*44/100);}
-                        rear.Send(frame);
+                        // Open only the reviewed UART before enabling its power gate.
+                        using(var rear=new RearDevice(RearDevice.FindPort())){
+                            RearLighting.Power(true,enabled=>native.BackLight(enabled),()=>native.getLight2()==0,Thread.Sleep);
+                            rear.Send(RearLighting.Frame(r));
+                        }
+                        answer.Data["rear-power"]="On";
                         answer.Message = "Rear command sent • " + r.Effect + " (visual confirmation needed).";
                     }
                 }
                 return answer;
             } else if(r.Action=="rear-music") {
+                if(r.Brightness==0)throw new ArgumentException("Use rear-off for zero brightness.");
+                if(!KeyboardAnimation.OwnerAlive(r.OwnerProcessId,r.OwnerStartedTicks))throw new IOException("The music owner is no longer running.");
                 string port=RearDevice.FindPort();
+                using(var ownership=new HardwareLease(@"Global\GTBookStableRear")){
+                if(!ownership.Acquire(0))throw new IOException("Another rear-light controller is active.");
                 using(var rear=new RearDevice(port))
                 using(var meter=new AudioMeter())
+                using(var ready=new EventWaitHandle(false,EventResetMode.ManualReset,RearMusic.ReadyName))
                 using(var stop=new EventWaitHandle(false,EventResetMode.ManualReset,@"Local\GTBookMusicStop")) {
-                    using(var lease=new HardwareLease()){if(!lease.Acquire(3000))throw new IOException("Another hardware command is busy.");Call(oem,"BackLight",true);}
+                    if(stop.WaitOne(0)||!KeyboardAnimation.OwnerAlive(r.OwnerProcessId,r.OwnerStartedTicks))throw new IOException("Music sync cancelled before starting.");
+                    using(var lease=new HardwareLease()){if(!lease.Acquire(3000))throw new IOException("Another hardware command is busy.");RearLighting.Power(true,enabled=>native.BackLight(enabled),()=>native.getLight2()==0,Thread.Sleep);}
                     try {
-                        int count=0;
-                        while(!stop.WaitOne(50)) {
-                            if(++count%20==0 && Conflict().Length>0)throw new IOException("Another control utility started; music stopped.");
-                            byte[] frame=Protocol.Rear(r.Effect,r.Colors[0],r.Brightness,r.Speed);
-                            byte peak=(byte)Math.Min(255,Math.Round(meter.Peak()*255)); frame[12]=peak;frame[15]=peak;rear.Send(frame);
-                        }
+                        int checks=0;bool alive=true;
+                        RearMusic.Stream(()=>stop.WaitOne(0),()=>{
+                            if(checks++%20==0){alive=KeyboardAnimation.OwnerAlive(r.OwnerProcessId,r.OwnerStartedTicks);if(Conflict().Length>0)throw new IOException("Another control utility started; music stopped.");}
+                            return alive;
+                        },()=>meter.Peak(),peak=>{
+                            byte[] frame=RearLighting.Frame(r);frame[12]=peak;frame[15]=peak;rear.Send(frame);
+                        },()=>ready.Set(),()=>stop.WaitOne(50));
                     } finally {rear.Send(Protocol.Rear("Static",r.Colors[0],r.Brightness,1));}
                 }
                 answer.Message="Music sync stopped; static rear colour restored.";return answer;
+                }
             }
             if(r.Action!="refresh")return answer;
             uint mode = Telemetry(()=>Call(oem, "GetPerformanceMode"));
-            answer.Data["mode"] = mode <= 3 ? new[] { "Quiet", "Balanced", "Gaming", "OEM mode 3" }[mode] : "Unknown (" + mode + ")";
+            answer.Data["mode"] = mode <= 3 ? new[] { "Quiet", "Balanced", "Performance", "OEM mode 3" }[mode] : "Unknown (" + mode + ")";
             answer.Data["cpu"] = Temperature(Telemetry(()=>Call(oem, "GetCPUTem")));
             answer.Data["cooling"] = Telemetry(()=>Call(oem, "GetFanFullMode")) == 0 ? "Firmware auto" : "Full fan override";
             foreach(var field in new[]{"gpu","cpu-fan","gpu-fan","usb","gpu-mode"}) {
                 try { uint v=Telemetry(()=>Call(oem,field=="gpu"?"GetGPUTem":field=="cpu-fan"?"GetCPUFan":field=="gpu-fan"?"GetGPUFan":field=="usb"?"GetUSBCharging":"GetGPUMode"));
-                    answer.Data[field]=field=="gpu"?Temperature(v):field.EndsWith("fan")?(v*100)+" RPM":field=="usb"?(v==1?"On":"Off"):GpuModes.Name(v);
-                    if(field=="gpu-mode")answer.Data["gpu-raw"]=v.ToString();
-                } catch(Exception e){answer.Data[field]="Unavailable: "+e.Message;}
+                    if(field=="gpu-mode"){
+                        if(v<1||v>3){int pnp=GpuModes.DetectPnpMode();if(pnp>=1&&pnp<=3)v=(uint)pnp;}
+                        answer.Data[field]=GpuModes.Name(v);
+                        if(v>=1&&v<=3)answer.Data["gpu-raw"]=v.ToString();
+                    }else{
+                        answer.Data[field]=field=="gpu"?Temperature(v):field.EndsWith("fan")?(v*100)+" RPM":field=="usb"?(v==1?"On":"Off"):GpuModes.Name(v);
+                    }
+                } catch(Exception e){
+                    if(field=="gpu-mode"){
+                        int pnp=GpuModes.DetectPnpMode();
+                        if(pnp>=1&&pnp<=3){
+                            answer.Data[field]=GpuModes.Name((uint)pnp);
+                            answer.Data["gpu-raw"]=pnp.ToString();
+                        }else answer.Data[field]="Unavailable: "+e.Message;
+                    }else answer.Data[field]="Unavailable: "+e.Message;
+                }
             }
             try{answer.Data["rear-power"]=Telemetry(()=>Call(oem,"getLight2"))==0?"On":"Off";}catch(Exception e){answer.Data["rear-power-read-error"]=e.Message;}
             if (r.Action == "refresh") answer.Message = "Hardware refreshed • " + DateTime.Now.ToString("HH:mm:ss");

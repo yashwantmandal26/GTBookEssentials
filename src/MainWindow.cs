@@ -70,9 +70,9 @@ namespace GTBook
         private Label updateSummaryLabel, updateDetailsLabel;
         private Panel updateCardRef;
 
-		private readonly Request keyboard = Store.Load("keyboard");
+		private readonly Request keyboard;
 
-		private readonly Request rear = Store.Load("rear");
+		private readonly Request rear;
 
 		private readonly System.Windows.Forms.Timer clock = new System.Windows.Forms.Timer();
 
@@ -283,6 +283,8 @@ namespace GTBook
 		{
 			MainWindow mainWindow = this;
 			this.preview = preview;
+            keyboard = preview ? new Request() : Store.Load("keyboard");
+            rear = preview ? new Request() : Store.Load("rear");
             using (var g = Graphics.FromHwnd(IntPtr.Zero)) {
                 initialDpiScale = g.DpiX > 0 ? g.DpiX / 96f : 1f;
             }
@@ -294,8 +296,8 @@ namespace GTBook
             Disposed+=(s,e)=>themeMotion.Dispose();
             HandleCreated+=(s,e)=>Theme.ApplyChrome(this);
             keyboardCommands=new LatestCommandPump<Request>(r=>Run(r,"keyboard",false,!string.IsNullOrEmpty(r.Feedback)));
-            try{string preference=Path.Combine(Store.DirectoryPath,"mode-sounds.txt");bool enabled;if(File.Exists(preference)&&bool.TryParse(File.ReadAllText(preference),out enabled))modeSounds=enabled;}catch{}
-            autoEnergySaver=Store.Flag("auto-energy-saver",true);
+            if(!preview){try{string preference=Path.Combine(Store.DirectoryPath,"mode-sounds.txt");bool enabled;if(File.Exists(preference)&&bool.TryParse(File.ReadAllText(preference),out enabled))modeSounds=enabled;}catch{}}
+            autoEnergySaver=preview||Store.Flag("auto-energy-saver",true);
             for(int i=0;i<4;i++){keyboard.Colors[i]=LightingColour.VividHex(keyboard.Colors[i]);rear.Colors[i]=LightingColour.VividHex(rear.Colors[i]);}
 			Text = AppIdentity.Name + (preview ? " (layout preview)" : "");
             Icon=AppIdentity.LoadIcon(64);
@@ -916,6 +918,7 @@ namespace GTBook
             }
             var motion=page.Controls[0].Controls.OfType<ComboBox>().Single(control=>control.AccessibleName=="Animation direction");
             motion.SelectedIndex=1;
+            syncingKeyboardChoice=true;kbExtraEffect.SelectedIndex=-1;syncingKeyboardChoice=false;
             foreach(string name in ExtraEffects.Names){
                 kbExtraEffect.SelectedItem=name;keyboardChoiceChanged();
                 if(keyboard.Effect!=name||keyboard.Direction!=1)throw new Exception("Effect picker lost the selection or saved direction: "+name);
@@ -2126,7 +2129,7 @@ namespace GTBook
 				}
 				layoutKeyboardCard();
 			};
-			kbEffect.SelectedIndexChanged += delegate
+			Action applyOfficialChoice = delegate
 			{
 				if (!syncingKeyboardChoice)
 				{
@@ -2134,7 +2137,9 @@ namespace GTBook
 					keyboardChoiceChanged();
 				}
 			};
-			kbExtraEffect.SelectedIndexChanged += delegate
+			kbEffect.SelectedIndexChanged += delegate { applyOfficialChoice(); };
+			kbEffect.SelectionChangeCommitted += delegate { applyOfficialChoice(); };
+			Action applyExtraChoice = delegate
 			{
 				if (!syncingKeyboardChoice)
 				{
@@ -2142,6 +2147,8 @@ namespace GTBook
 					keyboardChoiceChanged();
 				}
 			};
+			kbExtraEffect.SelectedIndexChanged += delegate { applyExtraChoice(); };
+			kbExtraEffect.SelectionChangeCommitted += delegate { applyExtraChoice(); };
 			keyboardChoiceChanged();
             BuildRearCard();
 			SoftPanel softPanel3 = Card("Keep it simple", "Successful lighting changes are remembered. Running Extra animations can resume after sign-in.\nSet brightness to zero to turn the keyboard off.", 115);

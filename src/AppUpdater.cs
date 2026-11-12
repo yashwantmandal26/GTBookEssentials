@@ -37,9 +37,7 @@ namespace GTBook {
         public const string LatestReleaseApiUrl = "https://api.github.com/repos/yashwantmandal26/GTBookEssentials/releases/latest";
         public const string ReleasesPageUrl = "https://github.com/yashwantmandal26/GTBookEssentials/releases";
 
-        static readonly string[] AllowedHosts = {
-            "github.com",
-            "api.github.com",
+        static readonly string[] AllowedAssetCdnHosts = {
             "objects.githubusercontent.com",
             "release-assets.githubusercontent.com",
             "github-releases.githubusercontent.com"
@@ -89,8 +87,19 @@ namespace GTBook {
             if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out uri)) return false;
             if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return false;
             string host = uri.Host.ToLowerInvariant();
-            for (int i = 0; i < AllowedHosts.Length; i++) {
-                if (host == AllowedHosts[i] || host.EndsWith("." + AllowedHosts[i], StringComparison.Ordinal)) return true;
+            string path = uri.AbsolutePath;
+            if (host == "github.com") {
+                string prefix = "/" + Owner + "/" + Repo + "/";
+                string repoRoot = "/" + Owner + "/" + Repo;
+                return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(path, repoRoot, StringComparison.OrdinalIgnoreCase);
+            }
+            if (host == "api.github.com") {
+                string prefix = "/repos/" + Owner + "/" + Repo + "/";
+                return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+            }
+            for (int i = 0; i < AllowedAssetCdnHosts.Length; i++) {
+                if (host == AllowedAssetCdnHosts[i] || host.EndsWith("." + AllowedAssetCdnHosts[i], StringComparison.Ordinal)) return true;
             }
             return false;
         }
@@ -272,7 +281,9 @@ namespace GTBook {
 
         internal static string ResolveExpectedSha256(string inlineSha256, string sha256AssetUrl, Func<string, string> fetchText) {
             if (!string.IsNullOrEmpty(inlineSha256)) return inlineSha256;
-            if (string.IsNullOrEmpty(sha256AssetUrl)) return null;
+            if (string.IsNullOrEmpty(sha256AssetUrl)) {
+                throw new IOException("Release package has no SHA-256 checksum to verify.");
+            }
             string digest;
             try {
                 digest = ExtractSha256Hex(fetchText(sha256AssetUrl));
@@ -324,11 +335,9 @@ namespace GTBook {
                     }
 
                     string expectedHash = ResolveExpectedSha256(info.ExpectedSha256, info.Sha256AssetUrl, FetchText);
-                    if (!string.IsNullOrEmpty(expectedHash)) {
-                        string actualHash = ComputeSha256(tempFile);
-                        if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase)) {
-                            throw new IOException("Update checksum mismatch. Expected " + expectedHash + ", got " + actualHash + ".");
-                        }
+                    string actualHash = ComputeSha256(tempFile);
+                    if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase)) {
+                        throw new IOException("Update checksum mismatch. Expected " + expectedHash + ", got " + actualHash + ".");
                     }
 
                     if (File.Exists(finalFile)) File.Delete(finalFile);

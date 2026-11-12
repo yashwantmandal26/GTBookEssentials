@@ -816,6 +816,8 @@ namespace GTBook {
                 Check(AppUpdater.IsNewer("v2.2",new Version(2,1,0,0)),"v2.2 must be newer than 2.1");
                 Check(!AppUpdater.IsNewer("v2.1",new Version(2,1,0,0)),"same version must not trigger update");
                 Check(AppUpdater.IsTrustedDownloadUrl("https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.2/GTBOOK-Essentials-Setup.exe"),"GitHub release URL should be trusted");
+                Check(!AppUpdater.IsTrustedDownloadUrl("https://github.com/otheruser/evil/releases/download/v2.2/setup.exe"),"cross-repo GitHub URL must be rejected");
+                Check(!AppUpdater.IsTrustedDownloadUrl("https://api.github.com/repos/otheruser/evil/releases/latest"),"cross-repo GitHub API URL must be rejected");
                 Check(!AppUpdater.IsTrustedDownloadUrl("http://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.2/GTBOOK-Essentials-Setup.exe"),"HTTP URL must be rejected");
                 Check(!AppUpdater.IsTrustedDownloadUrl("https://evil.example.com/setup.exe"),"untrusted domain must be rejected");
                 string sha="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -861,8 +863,11 @@ namespace GTBook {
                     Check(fanWrites==2&&fanFull==0,"Turbo exit must write SetFanFullMode(false)");
                 }
             });
-            test("Updater SHA-256 verification fails closed when checksum download fails or digest is invalid",()=>{
-                bool threwFetch=false,threwInvalid=false;
+            test("Updater SHA-256 verification fails closed when checksum is missing, download fails, or digest is invalid",()=>{
+                bool threwMissing=false,threwFetch=false,threwInvalid=false;
+                try{AppUpdater.ResolveExpectedSha256("","",u=>"");}
+                catch(IOException){threwMissing=true;}
+                Check(threwMissing,"missing checksum and checksum URL must fail closed");
                 try{AppUpdater.ResolveExpectedSha256("","https://github.com/yashwantmandal26/GTBookEssentials/releases/download/v2.2/GTBOOK-Essentials-Setup.exe.sha256",u=>{throw new TimeoutException("network timeout");});}
                 catch(IOException){threwFetch=true;}
                 Check(threwFetch,"checksum download error must fail closed");

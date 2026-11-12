@@ -5,9 +5,9 @@ using System.Reflection;
 [assembly: AssemblyTitle("GTBOOK Essentials")]
 [assembly: AssemblyProduct("GTBOOK Essentials")]
 [assembly: AssemblyDescription("Keyboard lighting, cooling and laptop essentials")]
-[assembly: AssemblyVersion("2.1.3.0")]
-[assembly: AssemblyFileVersion("2.1.3.0")]
-[assembly: AssemblyInformationalVersion("2.1.3")]
+[assembly: AssemblyVersion("2.1.4.0")]
+[assembly: AssemblyFileVersion("2.1.4.0")]
+[assembly: AssemblyInformationalVersion("2.1.4")]
 
 namespace GTBook {
     public static class AppIdentity {

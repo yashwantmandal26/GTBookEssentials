@@ -44,7 +44,15 @@ jobs:
         run: .\Build-Release.ps1
       - name: Upload test results on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        shell: powershell
+        run: |
+          if (Test-Path '.\tests\results.txt') {
+            Get-Content '.\tests\results.txt' | Where-Object { $_ -like 'FAIL *' -or $_ -like '* failed*' } | ForEach-Object {
+              Write-Host "::error::$($_)"
+            }
+          }
+      - uses: actions/upload-artifact@v7
+        if: failure()
         with:
           name: test-results-log
           path: tests/results.txt

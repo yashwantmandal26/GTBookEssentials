@@ -77,10 +77,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = $env:GITHUB_REF_NAME
-          $assets = Get-ChildItem .\out\ -File | Where-Object { $_.Extension -in '.exe', '.zip', '.sha256' } | ForEach-Object { $_.FullName }
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag @assets --clobber
-          } else {
-            gh release create $tag @assets --title "GTBOOK Essentials $tag" --generate-notes
+          $repo = $env:GITHUB_REPOSITORY
+          $assets = @(Get-ChildItem .\out\ -File | Where-Object { $_.Extension -in '.exe', '.zip', '.sha256' } | ForEach-Object { $_.FullName })
+          if ($assets.Count -eq 0) { throw 'No release assets found in .\out\' }
+          $prev = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+          try {
+            cmd /c "gh release view $tag --repo $repo >nul 2>&1"
+            $exists = ($LASTEXITCODE -eq 0)
+            if ($exists) {
+              & gh release upload $tag @assets --repo $repo --clobber
+            } else {
+              & gh release create $tag @assets --repo $repo --title "GTBOOK Essentials $tag" --generate-notes
+            }
+            if ($LASTEXITCODE -ne 0) { throw "GitHub Release publish failed with exit code $LASTEXITCODE." }
+          } finally {
+            $ErrorActionPreference = $prev
           }

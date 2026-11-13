@@ -15,10 +15,29 @@ namespace GTBook {
     public static class SystemStats {
         [StructLayout(LayoutKind.Sequential)] struct Memory { public uint Length,Load;public ulong TotalPhysical,AvailablePhysical,TotalPage,AvailablePage,TotalVirtual,AvailableVirtual,Extended; }
         [DllImport("kernel32.dll",SetLastError=true)] static extern bool GlobalMemoryStatusEx(ref Memory memory);
+        [DllImport("kernel32.dll")] static extern ulong GetTickCount64();
         static string disk="Unavailable";
         static int diskPercent=-1;
         static string diskDetail="";
         static DateTime diskAt=DateTime.MinValue;
+
+        public static TimeSpan GetUptime() {
+            try {
+                return TimeSpan.FromMilliseconds(GetTickCount64());
+            } catch {
+                return TimeSpan.FromMilliseconds((uint)Environment.TickCount);
+            }
+        }
+
+        public static string FormatUptime(TimeSpan t) {
+            if (t.TotalDays >= 1) {
+                return string.Format("{0}d {1}h {2}m", (int)t.TotalDays, t.Hours, t.Minutes);
+            }
+            if (t.TotalHours >= 1) {
+                return string.Format("{0}h {1}m", (int)t.TotalHours, t.Minutes);
+            }
+            return string.Format("{0}m", Math.Max(1, (int)t.TotalMinutes));
+        }
 
         static string FormatGb(ulong bytes){
             double gb=bytes/(1024.0*1024.0*1024.0);

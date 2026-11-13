@@ -12,12 +12,39 @@ namespace GTBook {
         public Func<string> Badge;
         public string Target="keyboard";
         readonly Stopwatch clock=new Stopwatch();
-        public bool Animate {set{if(value){animation.Interval=Target=="keyboard"?67:100;clock.Start();animation.Start();}else{clock.Stop();animation.Stop();}}}
+        public bool Animate {set{if(value){animation.Interval=Target=="keyboard"?67:33;clock.Start();animation.Start();}else{clock.Stop();animation.Stop();}}}
         double phase {get{return clock.Elapsed.TotalSeconds;}}
-        public LivePreview(){SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);DoubleBuffered=true;BackColor=Theme.White;Height=170;AccessibleName="Graphical preview, not applied";animation.Interval=100;animation.Tick+=(s,e)=>{var form=FindForm();if(form!=null&&form.Visible&&form.WindowState!=FormWindowState.Minimized){if(Target=="rear"&&Selection!=null&&IsOff(Selection()))return;Invalidate();}};}
+        public LivePreview(){SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);DoubleBuffered=true;BackColor=Theme.White;Height=170;AccessibleName="Graphical preview, not applied";animation.Interval=33;animation.Tick+=(s,e)=>{var form=FindForm();if(form!=null&&form.Visible&&form.WindowState!=FormWindowState.Minimized){if(Target=="rear"&&Selection!=null&&IsOff(Selection()))return;Invalidate();}};}
         protected override void OnPaintBackground(PaintEventArgs e){}
         protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);Animate=Visible&&FindForm()!=null&&FindForm().Visible;}
         protected override void Dispose(bool disposing){if(disposing)animation.Dispose();base.Dispose(disposing);}
+        static AudioMeter liveAudioMeter;
+        static DateTime nextAudioMeterAttempt=DateTime.MinValue;
+        static double cachedLivePeak=0;
+        static DateTime cachedLivePeakAt=DateTime.MinValue;
+
+        public static double GetLiveAudioPeak(){
+            if((DateTime.UtcNow-cachedLivePeakAt).TotalMilliseconds<30)return cachedLivePeak;
+            try{
+                if(liveAudioMeter==null&&DateTime.UtcNow>=nextAudioMeterAttempt){
+                    try{liveAudioMeter=new AudioMeter();}
+                    catch{nextAudioMeterAttempt=DateTime.UtcNow.AddSeconds(5);}
+                }
+                if(liveAudioMeter!=null){
+                    cachedLivePeak=liveAudioMeter.Peak();
+                    cachedLivePeakAt=DateTime.UtcNow;
+                    return cachedLivePeak;
+                }
+            }catch{
+                try{if(liveAudioMeter!=null)liveAudioMeter.Dispose();}catch{}
+                liveAudioMeter=null;
+                nextAudioMeterAttempt=DateTime.UtcNow.AddSeconds(5);
+            }
+            cachedLivePeak=0;
+            cachedLivePeakAt=DateTime.UtcNow;
+            return 0;
+        }
+
         public static Color Hue(double h){h=(h%1+1)%1;double x=h*6;int i=(int)x;int f=(int)((x-i)*255);switch(i){case 0:return Color.FromArgb(255,f,0);case 1:return Color.FromArgb(255-f,255,0);case 2:return Color.FromArgb(0,255,f);case 3:return Color.FromArgb(0,255-f,255);case 4:return Color.FromArgb(f,0,255);default:return Color.FromArgb(255,0,255-f);}}
         public static Color KeyColour(Request r,int zone,double position,double time) {
             if(r.Brightness==0)return Color.FromArgb(42,44,47);
@@ -35,13 +62,69 @@ namespace GTBook {
         public static bool IsOff(Request r){return r.Action=="rear-off"||r.Brightness==0;}
         public static Color RearColour(Request r,int i,int count,double phase){
             if(IsOff(r))return Color.FromArgb(176,181,173);
-            Color c=LightingColour.Vivid(ColorTranslator.FromHtml(r.Colors[0]));double alpha=r.Brightness/100.0;
-            if(r.Effect=="Breathing")alpha*=.15+.85*(Math.Sin(phase*(1+r.Speed/3.0))+1)/2;
-            if(r.Effect=="Loop")c=LightingColour.Vivid(ColorTranslator.FromHtml(r.Colors[((i+(int)(phase*8))/8)%2]));
-            if(r.Effect=="Cover")c=LightingColour.Vivid(ColorTranslator.FromHtml(r.Colors[i<count*(Math.Sin(phase)+1)/2?0:1]));
-            if(r.Effect=="Rhythm")alpha*=Math.Abs(i-count/2)<(Math.Sin(phase*4)+1)*count/4?1:.06;
-            if(r.Effect=="Beat")alpha*=.06+.94*Math.Pow((Math.Sin(phase*3)+1)/2,2);
-            return LightingColour.Dim(c,alpha);
+            Color c1=LightingColour.Vivid(ColorTranslator.FromHtml(r.Colors[0]));
+            Color c2=(r.Colors.Length>1&&!string.IsNullOrEmpty(r.Colors[1]))?LightingColour.Vivid(ColorTranslator.FromHtml(r.Colors[1])):c1;
+            double alpha=Math.Max(0.06,r.Brightness/100.0);
+            double pos=count>1?(double)i/(count-1):0.5;
+
+            if(r.Effect=="Static"){
+                return LightingColour.Dim(c1,alpha);
+            }
+            if(r.Effect=="Breathing"){
+                double freq=1.0+(r.Speed/9.0)*2.2;
+                double wave=(Math.Sin(phase*freq*Math.PI)+1.0)/2.0;
+                double pulse=0.12+0.88*Math.Pow(wave,1.8);
+                return LightingColour.Dim(c1,alpha*pulse);
+            }
+            if(r.Effect=="Loop"){
+                double wave=(Math.Sin((pos*2.5-phase*1.5)*Math.PI*2.0)+1.0)/2.0;
+                int rc=(int)Math.Round(c1.R+(c2.R-c1.R)*wave);
+                int gc=(int)Math.Round(c1.G+(c2.G-c1.G)*wave);
+                int bc=(int)Math.Round(c1.B+(c2.B-c1.B)*wave);
+                Color blended=Color.FromArgb(Math.Max(0,Math.Min(255,rc)),Math.Max(0,Math.Min(255,gc)),Math.Max(0,Math.Min(255,bc)));
+                return LightingColour.Dim(blended,alpha);
+            }
+            if(r.Effect=="Cover"){
+                double sweep=(Math.Sin(phase*1.6)+1.0)/2.0;
+                double diff=(pos-sweep)*10.0;
+                double factor=1.0/(1.0+Math.Exp(-diff));
+                int rc=(int)Math.Round(c1.R+(c2.R-c1.R)*factor);
+                int gc=(int)Math.Round(c1.G+(c2.G-c1.G)*factor);
+                int bc=(int)Math.Round(c1.B+(c2.B-c1.B)*factor);
+                Color blended=Color.FromArgb(Math.Max(0,Math.Min(255,rc)),Math.Max(0,Math.Min(255,gc)),Math.Max(0,Math.Min(255,bc)));
+                return LightingColour.Dim(blended,alpha);
+            }
+            if(r.Effect=="Rhythm"){
+                double dist=Math.Abs(pos-0.5)*2.0;
+                double simulatedPeak=0.2+0.75*Math.Max(0,Math.Sin(phase*5.0)*0.5+Math.Sin(phase*11.0+i*0.05)*0.3+0.2);
+                double audioPeak=GetLiveAudioPeak();
+                double level=audioPeak>0.03?Math.Min(1.0,audioPeak*1.4):simulatedPeak;
+                level=Math.Max(0.12,Math.Min(1.0,level));
+                if(dist<=level){
+                    double intensity=0.4+0.6*(1.0-(dist/level)*0.45);
+                    double blendT=Math.Min(1.0,dist/Math.Max(0.01,level));
+                    int rc=(int)Math.Round(c1.R+(c2.R-c1.R)*blendT);
+                    int gc=(int)Math.Round(c1.G+(c2.G-c1.G)*blendT);
+                    int bc=(int)Math.Round(c1.B+(c2.B-c1.B)*blendT);
+                    Color blended=Color.FromArgb(Math.Max(0,Math.Min(255,rc)),Math.Max(0,Math.Min(255,gc)),Math.Max(0,Math.Min(255,bc)));
+                    return LightingColour.Dim(blended,alpha*intensity);
+                }else{
+                    return LightingColour.Dim(c1,alpha*0.07);
+                }
+            }
+            if(r.Effect=="Beat"){
+                double beatTime=phase*2.2;
+                double cycle=beatTime%1.0;
+                double kick=Math.Exp(-cycle*4.8);
+                double dist=Math.Abs(pos-0.5)*2.0;
+                double ripple=Math.Max(0,1.0-Math.Abs(dist-cycle*1.25)*4.0);
+                double pulse=kick*0.85+ripple*0.35+0.1;
+                double audioPeak=GetLiveAudioPeak();
+                if(audioPeak>0.03)pulse=Math.Max(pulse,audioPeak*1.3);
+                pulse=Math.Max(0.08,Math.Min(1.0,pulse));
+                return LightingColour.Dim(c1,alpha*pulse);
+            }
+            return LightingColour.Dim(c1,alpha);
         }
         protected override void OnPaint(PaintEventArgs e){
             base.OnPaint(e);var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;g.Clear(Theme.White);
@@ -72,24 +155,81 @@ namespace GTBook {
                 Draw(g,r.Effect+" · "+r.Brightness+"% · preview only",new RectangleF(10*s,h-29*s,w-20*s,24*s),9);
             } else if(Target=="rear"){
                 bool off=IsOff(r);
-                var shell=new RectangleF(14*s,42*s,w-28*s,h-82*s);
-                using(var p=Theme.Round(shell,12*s)){
-                    using(var b=new LinearGradientBrush(shell,Color.FromArgb(47,53,65),Color.FromArgb(16,20,28),90f))g.FillPath(b,p);
-                    using(var pen=new Pen(Theme.Edge,s))g.DrawPath(pen,p);
+                var shell=new RectangleF(14*s, 38*s, w-28*s, 44*s);
+                if (!off) {
+                    Color primeColor = LightingColour.Vivid(ColorTranslator.FromHtml(r.Colors[0]));
+                    float glowAlpha = Math.Max(12f, Math.Min(70f, (r.Brightness / 100f) * 60f));
+                    var topAura = new RectangleF(shell.X + 8*s, shell.Y - 14*s, shell.Width - 16*s, 15*s);
+                    using(var topBrush = new LinearGradientBrush(topAura, Color.FromArgb(0, primeColor), Color.FromArgb((int)glowAlpha, primeColor), 90f)) {
+                        g.FillRectangle(topBrush, topAura);
+                    }
+                    var btmAura = new RectangleF(shell.X + 8*s, shell.Bottom - 1*s, shell.Width - 16*s, 15*s);
+                    using(var btmBrush = new LinearGradientBrush(btmAura, Color.FromArgb((int)glowAlpha, primeColor), Color.FromArgb(0, primeColor), 90f)) {
+                        g.FillRectangle(btmBrush, btmAura);
+                    }
                 }
-                int count=40;float cell=(shell.Width-22*s)/count;
-                for(int i=0;i<count;i++){
-                    Color c=off?Color.FromArgb(74,82,94):RearColour(r,i,count,phase);
-                    float x=shell.X+11*s+i*cell;
-                    if(!off)using(var b=new SolidBrush(Color.FromArgb(42,c)))g.FillRectangle(b,x,shell.Y+shell.Height*.2f,Math.Max(1,cell),shell.Height*.6f);
-                    using(var b=new SolidBrush(c))g.FillRectangle(b,x,shell.Y+shell.Height*.38f,Math.Max(1,cell-s),shell.Height*.24f);
+                using(var p=Theme.Round(shell, 10*s)){
+                    Color shellTop = Theme.Tone(Color.FromArgb(28, 32, 42), Color.FromArgb(14, 17, 24));
+                    Color shellBtm = Theme.Tone(Color.FromArgb(16, 18, 24), Color.FromArgb(8, 10, 14));
+                    using(var b=new LinearGradientBrush(shell, shellTop, shellBtm, 90f)) g.FillPath(b, p);
+                    Color rimColor = Theme.Tone(Color.FromArgb(64, 72, 88), Color.FromArgb(40, 46, 60));
+                    using(var pen=new Pen(rimColor, 1.2f*s)) g.DrawPath(pen, p);
                 }
-                string caption=Caption!=null?Caption():off?"OFF · selected preview":r.Effect+" · "+r.Brightness+"% · simulated preview";
-                string badge=Badge!=null?Badge():caption.StartsWith("NOT CONFIRMED")?"UNKNOWN":off?"OFF":caption.Contains("preview only")||caption.StartsWith("PREVIEW")?"PREVIEW":"ON";
-                var pill=new RectangleF(w-112*s,10*s,96*s,24*s);
-                using(var path=Theme.Round(pill,8*s))using(var fill=new SolidBrush(Theme.Pearl))g.FillPath(fill,path);
-                Draw(g,badge,new RectangleF(pill.X+10*s,pill.Y,pill.Width-10*s,pill.Height),9);
-                Draw(g,badge=="PREVIEW"?"Selected look · not sent to the device":badge=="MUSIC"?"Music sync active · simulated movement":off?badge=="OFF"?"Bar off · preview a look before applying":"Device state not confirmed":r.Effect+" · "+r.Brightness+"% · simulated appearance",new RectangleF(12*s,h-29*s,w-24*s,24*s),9);
+                int count=40;
+                float padInside = 10*s;
+                float cell = (shell.Width - padInside * 2) / count;
+                float segW = Math.Max(2f, cell - 1.5f*s);
+                float segH = shell.Height - 16*s;
+                float segY = shell.Y + 8*s;
+                for(int i=0; i<count; i++){
+                    Color c = off ? Color.FromArgb(70, 78, 92) : RearColour(r, i, count, phase);
+                    float segX = shell.X + padInside + i * cell;
+                    var segRect = new RectangleF(segX, segY, segW, segH);
+                    if (!off) {
+                        using(var haloBrush = new SolidBrush(Color.FromArgb(55, c))) {
+                            g.FillRectangle(haloBrush, segX - 0.5f*s, segY - 2*s, segW + 1f*s, segH + 4*s);
+                        }
+                    }
+                    using(var segPath = Theme.Round(segRect, 2.5f*s)) {
+                        using(var segBrush = new SolidBrush(c)) g.FillPath(segBrush, segPath);
+                    }
+                    if (!off) {
+                        Color coreC = Color.FromArgb(220, Math.Min(255, c.R + 65), Math.Min(255, c.G + 65), Math.Min(255, c.B + 65));
+                        float coreH = Math.Max(2f, segH * 0.26f);
+                        float coreY = segY + (segH - coreH) / 2f;
+                        using(var coreBrush = new SolidBrush(coreC)) {
+                            g.FillRectangle(coreBrush, segX + 0.5f*s, coreY, Math.Max(1f, segW - 1f*s), coreH);
+                        }
+                    }
+                }
+                string caption = Caption!=null ? Caption() : off ? "OFF · selected preview" : r.Effect+" · "+r.Brightness+"% · simulated preview";
+                string badge = Badge!=null ? Badge() : caption.StartsWith("NOT CONFIRMED") ? "UNKNOWN" : off ? "OFF" : caption.Contains("preview only") || caption.StartsWith("PREVIEW") ? "PREVIEW" : "ON";
+                float pillW = 100*s, pillH = 24*s;
+                var pillRect = new RectangleF(w - pillW - 14*s, 9*s, pillW, pillH);
+                Color pillFill = Theme.Tone(Color.FromArgb(248, 249, 252), Color.FromArgb(24, 28, 38));
+                Color pillBorder = Theme.Tone(Color.FromArgb(226, 230, 238), Color.FromArgb(48, 56, 74));
+                using(var pp = Theme.Round(pillRect, pillH / 2f)) {
+                    using(var pb = new SolidBrush(pillFill)) g.FillPath(pb, pp);
+                    using(var ppen = new Pen(pillBorder, 1f*s)) g.DrawPath(ppen, pp);
+                }
+                Color badgeDot = badge == "ON" ? Color.FromArgb(35, 169, 108) :
+                                 badge == "PREVIEW" ? Theme.OrangeEnd :
+                                 badge == "MUSIC" ? Color.FromArgb(0, 195, 255) :
+                                 badge == "STARTING" ? Theme.OrangeEnd :
+                                 Color.FromArgb(145, 150, 160);
+                float dotD = 6.5f*s;
+                float dotX = pillRect.X + 10*s;
+                float dotY = pillRect.Y + (pillH - dotD) / 2f;
+                using(var dotBrush = new SolidBrush(badgeDot)) g.FillEllipse(dotBrush, dotX, dotY, dotD, dotD);
+                using(var bf = new Font("Segoe UI", 8.2f, FontStyle.Bold)) {
+                    var textRect = new Rectangle((int)(dotX + dotD + 6*s), (int)pillRect.Y, (int)(pillW - dotD - 18*s), (int)pillH);
+                    TextRenderer.DrawText(g, badge, bf, textRect, Theme.Ink, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                }
+                string bottomText = badge=="PREVIEW" ? "Previewing look · not sent to device until Apply" :
+                                    badge=="MUSIC" ? "Music sync active · reacting to audio playback" :
+                                    off ? (badge=="OFF" ? "Rear light off · customize a look and apply" : "Device state not confirmed") :
+                                    r.Effect + " · " + r.Brightness + "% brightness · " + (RearLighting.UsesSecondColour(r.Effect) ? "2 colours" : "live effect");
+                Draw(g, bottomText, new RectangleF(14*s, h - 28*s, w - 28*s, 22*s), 9);
             } else DrawBehavior(g,r,s);
         }
         void DrawBehavior(Graphics g,Request r,float s){

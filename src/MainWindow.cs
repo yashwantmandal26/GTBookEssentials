@@ -597,8 +597,7 @@ namespace GTBook
             bool onBattery=SystemInformation.PowerStatus.PowerLineStatus!=PowerLineStatus.Online;
             int interval=ReadingRefresh.Interval(onBattery);
             if(!healthSyncPill.IsDisposed){
-                healthSyncPill.PillText=preview?"Preview":("Auto · "+(interval/1000)+"s");
-                healthSyncPill.DotColor=preview?muted:Color.FromArgb(35,169,108);
+                healthSyncPill.Visible=false;
             }
             if(preview)return;
             clock.Interval=interval;
@@ -617,7 +616,7 @@ namespace GTBook
         public void ExitApplication(){exitRequested=true;Close();}
         private void RestartWindows(){if(preview)return;Process.Start(new ProcessStartInfo("shutdown.exe","/r /t 0"){UseShellExecute=false,CreateNoWindow=true});}
         private void UpdateReadingsStamp(){
-            string text=preview?"PREVIEW":readingsFailed?"AUTO · retrying…":readingsUpdatedUtc==DateTime.MinValue?"AUTO · syncing…":"LIVE · "+readingsUpdatedUtc.ToLocalTime().ToString("HH:mm:ss");
+            string text=preview?"PREVIEW":readingsFailed?"Retrying…":readingsUpdatedUtc==DateTime.MinValue?"Syncing…":"PC on · "+SystemStats.FormatUptime(SystemStats.GetUptime());
             if(!readingsPill.IsDisposed){
                 readingsPill.PillText=text;
                 readingsPill.DotColor=preview?muted:readingsFailed?Color.FromArgb(244,145,36):readingsUpdatedUtc==DateTime.MinValue?Theme.OrangeEnd:Color.FromArgb(35,169,108);
@@ -634,6 +633,12 @@ namespace GTBook
                     if(hardwareReady){
                         RuntimeMetrics.Record("hardware_ready");
                         if(keyboardTask==null&&ExtraEffects.Contains(keyboard.Effect)&&keyboard.Brightness>0&&Store.Flag("resume-extra",keyboard.Action=="keyboard-animation"))await StartKeyboardAnimation(Copy(keyboard,"keyboard-animation"),true,true);
+                        if(rear!=null&&rear.Brightness>0&&rear.Action!="rear-off"){
+                            try{
+                                if(RearLighting.IsMusic(rear.Effect))await StartMusic(Copy(rear,"rear-music"));
+                                else await Run(Copy(rear,"rear"),null,true);
+                            }catch(Exception ex){Store.Log("Rear startup apply: "+ex.Message);}
+                        }
                         return;
                     }
                 }
@@ -1034,7 +1039,7 @@ namespace GTBook
                         if(rTitle!=null&&rTitle.Right>readingsPill.Left)throw new Exception("Right now header overlaps readingsPill at "+width+": title="+rTitle.Bounds+" pill="+readingsPill.Bounds+" card="+rightCard.Size);
                         var healthCard=page.Controls[2];
                         var hLabels=healthCard.Controls.OfType<Label>().Take(2).ToArray();
-                        if(hLabels.Length>0&&hLabels[0].Right>healthSyncPill.Left)throw new Exception("System health header overlaps pill at "+width+": title="+hLabels[0].Bounds+" pill="+healthSyncPill.Bounds);
+                        if(healthSyncPill!=null&&healthSyncPill.Visible&&hLabels.Length>0&&hLabels[0].Right>healthSyncPill.Left)throw new Exception("System health header overlaps pill at "+width+": title="+hLabels[0].Bounds+" pill="+healthSyncPill.Bounds);
                         if(hLabels.Length>1&&hLabels[0].Bottom>hLabels[1].Top)throw new Exception("System health header overlaps subtitle at "+width+": title="+hLabels[0].Bounds+" sub="+hLabels[1].Bounds);
                     }
                     if(pageTitle=="Settings"&&updateCardRef!=null&&!updateCardRef.IsDisposed&&updateCardRef.Visible){
@@ -1274,6 +1279,11 @@ namespace GTBook
 
 		private void RearEdited()
 		{
+			rearState.PreviewDraft = true;
+			if (rearDraftToggle != null && !rearDraftToggle.IsDisposed && !rearDraftToggle.Checked)
+			{
+				rearDraftToggle.Checked = true;
+			}
 			rearState.Edited(rear);
 			UpdateRearIndicator();
 		}
@@ -1764,7 +1774,8 @@ namespace GTBook
 
 			SoftPanel softPanel3 = Card("System health", "", 218);
 			Label healthTitle = softPanel3.Controls.OfType<Label>().FirstOrDefault();
-			if (healthTitle != null) healthTitle.Width = Math.Max(S(80), softPanel3.Width - S(230));
+			healthSyncPill.Visible = false;
+			if (healthTitle != null) healthTitle.Width = Math.Max(S(80), softPanel3.Width - S(44));
 			healthSyncPill.SetBounds(softPanel3.Width - S(204), S(12), S(180), S(24));
 			healthSyncPill.Anchor = AnchorStyles.Top | AnchorStyles.Left;
 			softPanel3.Controls.Add(healthSyncPill);
@@ -1822,16 +1833,16 @@ namespace GTBook
 			}
 			softPanel3.Controls.Add(healthBottomGrid);
 			RegisterCardReflow(softPanel3, () => {
-				healthSyncPill.SetBounds(softPanel3.Width - S(204), S(12), S(180), S(24));
+				healthSyncPill.Visible = false;
 				if (healthTitle != null && !healthTitle.IsDisposed) {
 					healthTitle.Location = new Point(S(22), S(12));
-					healthTitle.Width = Math.Max(S(80), healthSyncPill.Left - healthTitle.Left - S(8));
+					healthTitle.Width = Math.Max(S(80), softPanel3.Width - S(44));
 					healthTitle.Height = MeasureLabelHeight(healthTitle, healthTitle.Width, S(28));
 				}
 				int w = Math.Max(S(160), softPanel3.Width - S(44));
 				healthSub.Left = S(23);
 				healthSub.Width = Math.Max(S(160), softPanel3.Width - S(46));
-				healthSub.Top = (healthTitle != null && !healthTitle.IsDisposed) ? Math.Max(S(40), Math.Max(healthTitle.Bottom, healthSyncPill.Bottom) + S(2)) : S(40);
+				healthSub.Top = (healthTitle != null && !healthTitle.IsDisposed) ? Math.Max(S(40), healthTitle.Bottom + S(2)) : S(40);
 				healthSub.Height = MeasureLabelHeight(healthSub, healthSub.Width, S(20));
 				healthTopGrid.SetBounds(S(22), healthSub.Bottom + S(5), w, S(62));
 				healthBottomGrid.SetBounds(S(22), healthTopGrid.Bottom + S(5), w, S(72));
@@ -2261,8 +2272,10 @@ namespace GTBook
         private void BuildRearCard(){
             var card=Card("Rear light bar","Choose a look, preview it, then apply it to your device.",520);
             rearCardRef=card;
+            rearState.PreviewDraft=true;
             Label cardDesc=card.Controls.OfType<Label>().Last();
             rearIllustration=new LivePreview{Target="rear",Selection=()=>rearState.Illustration(rear),Caption=()=>rearState.Caption(rear),Badge=()=>rearState.Badge};
+            rearIllustration.Cursor=Cursors.Hand;
             rearIllustration.SetBounds(S(20),S(68),card.Width-S(40),S(110));rearIllustration.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;card.Controls.Add(rearIllustration);
             rearEditor=new BufferedPanel{Location=new Point(S(20),S(186)),Size=new Size(card.Width-S(40),S(168)),Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right,BackColor=Color.Transparent};card.Controls.Add(rearEditor);
             var effectLabel=Label("Effect",9,true);var firstLabel=Label("Colour 1",9,true);var secondLabel=Label("Colour 2",9,true);
@@ -2276,12 +2289,13 @@ namespace GTBook
             rearBright=Slider(brightnessPanel,rear.Brightness,S(4),0,100,"Brightness");rearSpeed=Slider(speedPanel,rear.Speed,S(4),0,9,"Breathing speed");
             rearEffect.SelectedIndexChanged+=(s,e)=>{rear.Effect=rearEffect.Text;RearEdited();};
             rearBright.ValueChanged+=(s,e)=>{rear.Brightness=rearBright.Value;RearEdited();};rearSpeed.ValueChanged+=(s,e)=>{rear.Speed=rearSpeed.Value;RearEdited();};
-            rearDraftToggle=new CheckBox{Text="Preview selected look · device stays unchanged",Checked=rearState.PreviewDraft,Location=new Point(S(20),S(362))};
+            rearDraftToggle=new CheckBox{Text="Preview selected look · device stays unchanged",Checked=true,Location=new Point(S(20),S(362))};
+            rearIllustration.Click+=(s,e)=>{if(rearDraftToggle!=null&&!rearDraftToggle.IsDisposed)rearDraftToggle.Checked=!rearDraftToggle.Checked;};
             ConfigureWrappingCheckBox(rearDraftToggle,card.Width,20);
             rearDraftToggle.CheckedChanged+=(s,e)=>{rearState.PreviewDraft=rearDraftToggle.Checked;UpdateRearIndicator();};card.Controls.Add(rearDraftToggle);
             var actions=new BufferedPanel{Location=new Point(S(20),S(392)),Size=new Size(card.Width-S(40),S(50)),Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right,BackColor=Color.Transparent};card.Controls.Add(actions);
             rearApplyButton=(RaisedButton)Button("Apply to bar",async()=>await RearAction(ApplyRear));rearApplyButton.Accent=Theme.OrangeEnd;rearApplyButton.Primary=true;
-            rearOffButton=(RaisedButton)Button("Turn off",async()=>await RearAction(async()=>await Run(new Request{Action="rear-off"},null)));rearOffButton.Accent=Color.FromArgb(226,79,70);
+            rearOffButton=(RaisedButton)Button("Turn off",async()=>await RearAction(async()=>{rearState.PreviewDraft=false;if(rearDraftToggle!=null&&!rearDraftToggle.IsDisposed)rearDraftToggle.Checked=false;await Run(new Request{Action="rear-off"},null);}));rearOffButton.Accent=Color.FromArgb(226,79,70);
             rearStopMusicButton=(RaisedButton)Button("Stop music",async()=>await RearAction(async()=>{await StopMusic();status.Text=rearResult;}));
             foreach(var button in new[]{rearApplyButton,rearOffButton,rearStopMusicButton}){button.Font=new Font("Segoe UI",10f,FontStyle.Bold);actions.Controls.Add(button);}
             rearOutcome=Label(rearState.Caption(rear),9.5f,true);rearOutcome.SetBounds(S(20),S(450),card.Width-S(40),S(26));rearOutcome.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;card.Controls.Add(rearOutcome);

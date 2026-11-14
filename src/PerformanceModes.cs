@@ -32,20 +32,44 @@ namespace GTBook {
                     if(attempt>0)delay(50);
                     try{if(oem.GetFanFullMode()==1u){fullFan=true;break;}}catch(Exception fanReadEx){if(attempt==3&&log!=null)log("Turbo fan readback: "+fanReadEx.Message);}
                 }
-                answer.Data["cooling"]=fullFan?"Full fan override":"Firmware auto";
-                if(!fullFan&&log!=null)log("Turbo mode: firmware did not confirm Full fan override.");
+                if(fullFan){
+                    answer.Ok=true;
+                    answer.Data["cooling"]="Full fan override";
+                }else{
+                    answer.Ok=false;
+                    answer.Data["mode"]="Performance";
+                    answer.Data["cooling"]="Firmware auto";
+                    answer.Data["partial"]="True";
+                    answer.Data["requested-mode"]="Turbo";
+                    answer.Message="Turbo fans could not be confirmed. Performance mode active with automatic cooling.";
+                    if(log!=null)log("Turbo mode: firmware did not confirm Full fan override.");
+                }
             }else if(restoreAutoCooling){
+                bool fanRestoreWriteOk=false;string restoreError=null;
                 try{
                     oem.SetFanFullMode(false);
-                    bool autoRestored=false;
+                    fanRestoreWriteOk=true;
+                }catch(Exception fanEx){
+                    restoreError=fanEx.Message;
+                    if(log!=null)log("Mode exit restore auto cooling: "+fanEx.Message);
+                }
+                bool autoRestored=false;
+                if(fanRestoreWriteOk){
                     for(int attempt=0;attempt<4;attempt++){
                         if(attempt>0)delay(50);
-                        if(oem.GetFanFullMode()==0u){autoRestored=true;break;}
+                        try{
+                            if(oem.GetFanFullMode()==0u){autoRestored=true;break;}
+                        }catch(Exception fanReadEx){
+                            if(attempt==3&&log!=null)log("Auto cooling readback: "+fanReadEx.Message);
+                        }
                     }
-                    answer.Data["cooling"]=autoRestored?"Firmware auto":"Full fan override";
-                    if(!autoRestored&&log!=null)log("Mode exit: firmware did not confirm automatic cooling restore.");
-                }catch(Exception fanEx){
-                    if(log!=null)log("Mode exit restore auto cooling: "+fanEx.Message);
+                }
+                answer.Data["cooling"]=autoRestored?"Firmware auto":"Full fan override";
+                if(!autoRestored){
+                    answer.Ok=false;
+                    answer.Data["cooling-restore-failed"]="True";
+                    answer.Message="Power mode confirmed · "+Names[mode]+", but automatic cooling could not be restored."+(restoreError!=null?" ("+restoreError+")":"");
+                    if(log!=null)log("Mode exit: firmware did not confirm automatic cooling restore.");
                 }
             }
             return answer;
@@ -94,18 +118,44 @@ namespace GTBook {
     // Watch only that register in the tray, rather than waking all sensor workers.
     public sealed class ModeObserver : IDisposable {
         readonly ModeObservation state;readonly ManualResetEvent stop=new ManualResetEvent(false);readonly Func<bool> idle;readonly Action<int> changed;
+        readonly Func<string> conflictChecker;readonly Func<OemProtocol> oemFactory;
         volatile bool disposed;
-        public ModeObserver(int initial,Func<bool> idle,Action<int> changed){state=new ModeObservation(initial);this.idle=idle;this.changed=changed;var thread=new Thread(Watch){IsBackground=true,Name="GTBOOK performance key"};thread.Start();}
+        public ModeObserver(int initial,Func<bool> idle,Action<int> changed,Func<string> conflictChecker=null,Func<OemProtocol> oemFactory=null){
+            state=new ModeObservation(initial);this.idle=idle;this.changed=changed;
+            this.conflictChecker=conflictChecker;this.oemFactory=oemFactory;
+            var thread=new Thread(Watch){IsBackground=true,Name="GTBOOK performance key"};thread.Start();
+        }
         public void Confirm(int mode){state.Confirm(mode);}
         public bool IsCurrent(int mode){return !disposed&&state.Current==mode;}
         void Watch(){
-            OemProtocol oem=null;int failures=0,interval=60,conflictCounter=0;
+            OemProtocol oem=null;int failures=0,interval=60,conflictCounter=40;bool inConflict=false;
             try{using(var lease=new HardwareLease())while(!stop.WaitOne(interval)){
-                if(++conflictCounter>=40){conflictCounter=0;try{if(Hardware.Conflict().Length>0){interval=3000;continue;}}catch{interval=5000;continue;}}
+                bool checkNow=inConflict||(++conflictCounter>=40);
+                if(checkNow){
+                    conflictCounter=0;
+                    bool conflictDetected=true;
+                    try{
+                        string c=conflictChecker!=null?conflictChecker():Hardware.Conflict();
+                        conflictDetected=!string.IsNullOrEmpty(c);
+                    }catch(Exception ex){
+                        conflictDetected=true;
+                        Store.Log("Performance key monitor conflict check failed: "+ex.Message);
+                    }
+                    if(conflictDetected){
+                        inConflict=true;
+                        if(oem!=null){oem.Dispose();oem=null;}
+                        interval=250;
+                        continue;
+                    }else{
+                        inConflict=false;
+                        interval=60;
+                    }
+                }
+                if(inConflict){interval=250;continue;}
                 if(!idle()||!lease.Acquire(40))continue;
                 int observed=-1;bool notify=false;
                 try{
-                    if(disposed)break;if(oem==null)oem=new OemProtocol();
+                    if(disposed)break;if(oem==null)oem=oemFactory!=null?oemFactory():new OemProtocol();
                     observed=(int)oem.GetPerformanceMode();notify=state.Observe(observed);
                     if(!notify&&observed>=0&&observed<3&&observed!=state.Current&&!stop.WaitOne(25))notify=state.Observe((int)oem.GetPerformanceMode());
                     failures=0;interval=60;

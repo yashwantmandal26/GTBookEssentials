@@ -113,31 +113,62 @@ namespace GTBook {
         static readonly object conflictLock=new object();static readonly ConflictCache pythonCache=new ConflictCache();
         public static string Base { get { return AppDomain.CurrentDomain.BaseDirectory; } }
         public static string OemDirectory { get { return Path.GetFullPath(Path.Combine(Base, "..", "Official_ControlCenter")); } }
-        public static string Conflict() {
-            lock(conflictLock)return ConflictCore();
+        public static Func<string> ConflictProbe = null;
+        public static readonly string[] RecognizedConflictProcesses = new[] {
+            "controlcenter",
+            "infinixgttoolkit",
+            "infinix toolkit",
+            "infinixtoolkit",
+            "infinixtoolkitfast"
+        };
+        public struct ConflictCheckResult {
+            public bool HasConflict;
+            public string ProcessName;
+            public string Message;
         }
-        static string ConflictCore(){
+        public static ConflictCheckResult CheckConflict() {
+            if (ConflictProbe != null) {
+                string probe = ConflictProbe();
+                if (!string.IsNullOrEmpty(probe)) return new ConflictCheckResult { HasConflict = true, ProcessName = "Probe", Message = probe };
+                return new ConflictCheckResult { HasConflict = false, ProcessName = "", Message = "" };
+            }
+            lock(conflictLock)return CheckConflictCore();
+        }
+        public static string Conflict() {
+            return CheckConflict().Message ?? "";
+        }
+        static ConflictCheckResult CheckConflictCore(){
             var python=new List<string>();
             foreach (var p in Process.GetProcesses()) {
                 using (p) {
                     string name;
-                    try { name = p.ProcessName.ToLowerInvariant(); } catch (InvalidOperationException) { continue; }
-                    if (new[] { "controlcenter", "infinixgttoolkit", "infinix toolkit", "infinixtoolkit", "infinixtoolkitfast" }.Contains(name)) return p.ProcessName + " is running. Close it from its tray before using hardware controls, then Refresh.";
+                    try { name = p.ProcessName.Trim().ToLowerInvariant(); } catch (InvalidOperationException) { continue; }
+                    if (RecognizedConflictProcesses.Contains(name)) {
+                        return new ConflictCheckResult {
+                            HasConflict = true,
+                            ProcessName = p.ProcessName,
+                            Message = p.ProcessName + " is running. Close it from its tray before using hardware controls, then Refresh."
+                        };
+                    }
                     if(name=="python"||name=="pythonw"){try{python.Add(p.Id+":"+p.StartTime.ToUniversalTime().Ticks);}catch{}}
                 }
             }
-            return pythonCache.Check(python,()=>{
-            try{
-            using (var q = new ManagementObjectSearcher("SELECT CommandLine FROM Win32_Process WHERE Name = 'python.exe' OR Name = 'pythonw.exe'"))
-            using (var rows = q.Get()) {
-                foreach (ManagementObject row in rows) {
-                    string command = Convert.ToString(row["CommandLine"]).ToLowerInvariant();
-                    if (command.Contains("infinix_toolkit.py") || command.Contains("infinix_backlight.py")) return "The old Python toolkit is running. Close it before using hardware controls.";
-                }
-            }
-            }catch{}
-            return "";
+            string pythonMsg = pythonCache.Check(python,()=>{
+                try{
+                    using (var q = new ManagementObjectSearcher("SELECT CommandLine FROM Win32_Process WHERE Name = 'python.exe' OR Name = 'pythonw.exe'"))
+                    using (var rows = q.Get()) {
+                        foreach (ManagementObject row in rows) {
+                            string command = Convert.ToString(row["CommandLine"]).ToLowerInvariant();
+                            if (command.Contains("infinix_toolkit.py") || command.Contains("infinix_backlight.py")) return "The old Python toolkit is running. Close it before using hardware controls.";
+                        }
+                    }
+                }catch{}
+                return "";
             });
+            if (!string.IsNullOrEmpty(pythonMsg)) {
+                return new ConflictCheckResult { HasConflict = true, ProcessName = "python", Message = pythonMsg };
+            }
+            return new ConflictCheckResult { HasConflict = false, ProcessName = "", Message = "" };
         }
         static object Oem() {
             return new OemProtocol();
@@ -249,8 +280,19 @@ namespace GTBook {
                         if(v<1||v>3){int pnp=GpuModes.DetectPnpMode();if(pnp>=1&&pnp<=3)v=(uint)pnp;}
                         answer.Data[field]=GpuModes.Name(v);
                         if(v>=1&&v<=3)answer.Data["gpu-raw"]=v.ToString();
+                    }else if(field=="gpu"){
+                        if(v>=1&&v<=125){
+                            answer.Data["gpu"]=v+" °C";
+                            answer.Data["gpu-status"]="Ok";
+                        }else if(v==0){
+                            answer.Data["gpu"]="0 °C";
+                            answer.Data["gpu-status"]="Asleep";
+                        }else{
+                            answer.Data["gpu"]="Unavailable";
+                            answer.Data["gpu-status"]="Unknown";
+                        }
                     }else{
-                        answer.Data[field]=field=="gpu"?Temperature(v):field.EndsWith("fan")?(v*100)+" RPM":field=="usb"?(v==1?"On":"Off"):GpuModes.Name(v);
+                        answer.Data[field]=field.EndsWith("fan")?(v*100)+" RPM":field=="usb"?(v==1?"On":"Off"):GpuModes.Name(v);
                     }
                 } catch(Exception e){
                     if(field=="gpu-mode"){
@@ -259,6 +301,21 @@ namespace GTBook {
                             answer.Data[field]=GpuModes.Name((uint)pnp);
                             answer.Data["gpu-raw"]=pnp.ToString();
                         }else answer.Data[field]="Unavailable: "+e.Message;
+                    }else if(field=="gpu"){
+                        string msg=e.Message??"";
+                        if(msg.IndexOf("busy",StringComparison.OrdinalIgnoreCase)>=0){
+                            answer.Data["gpu-status"]="Busy";
+                            answer.Data["gpu"]="Unavailable: Device busy; reading deferred.";
+                        }else if(e is UnauthorizedAccessException||msg.IndexOf("access",StringComparison.OrdinalIgnoreCase)>=0||msg.IndexOf("denied",StringComparison.OrdinalIgnoreCase)>=0){
+                            answer.Data["gpu-status"]="AccessDenied";
+                            answer.Data["gpu"]="Unavailable: Access denied.";
+                        }else if(msg.IndexOf("sleep",StringComparison.OrdinalIgnoreCase)>=0||msg.IndexOf("d3",StringComparison.OrdinalIgnoreCase)>=0){
+                            answer.Data["gpu-status"]="Asleep";
+                            answer.Data["gpu"]="Unavailable: Asleep";
+                        }else{
+                            answer.Data["gpu-status"]="Error";
+                            answer.Data["gpu"]="Unavailable: "+msg;
+                        }
                     }else answer.Data[field]="Unavailable: "+e.Message;
                 }
             }

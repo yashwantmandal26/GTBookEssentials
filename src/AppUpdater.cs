@@ -31,6 +31,144 @@ namespace GTBook {
         public string Error = "";
     }
 
+    public sealed class SemVersion : IComparable<SemVersion>, IEquatable<SemVersion> {
+        public int Major { get; private set; }
+        public int Minor { get; private set; }
+        public int Patch { get; private set; }
+        public string Prerelease { get; private set; }
+        public string BuildMetadata { get; private set; }
+        public bool IsPrerelease { get { return !string.IsNullOrEmpty(Prerelease); } }
+
+        public SemVersion(int major, int minor, int patch = 0, string prerelease = "", string buildMetadata = "") {
+            Major = major;
+            Minor = minor;
+            Patch = patch;
+            Prerelease = prerelease ?? "";
+            BuildMetadata = buildMetadata ?? "";
+        }
+
+        public static bool TryParse(string raw, out SemVersion result) {
+            result = null;
+            if (string.IsNullOrWhiteSpace(raw)) return false;
+            string s = raw.Trim();
+            if (s.StartsWith("v", StringComparison.OrdinalIgnoreCase)) s = s.Substring(1).Trim();
+
+            string buildMeta = "";
+            int plusIdx = s.IndexOf('+');
+            if (plusIdx >= 0) {
+                buildMeta = s.Substring(plusIdx + 1);
+                s = s.Substring(0, plusIdx);
+            }
+
+            string prerelease = "";
+            int dashIdx = s.IndexOf('-');
+            if (dashIdx >= 0) {
+                prerelease = s.Substring(dashIdx + 1);
+                s = s.Substring(0, dashIdx);
+            }
+
+            string[] parts = s.Split('.');
+            if (parts.Length < 1 || parts.Length > 4) return false;
+            int[] nums = new int[3];
+            for (int i = 0; i < Math.Min(3, parts.Length); i++) {
+                int n;
+                if (!int.TryParse(parts[i], out n) || n < 0) return false;
+                nums[i] = n;
+            }
+            if (parts.Length == 1 && nums[0] == 0 && string.IsNullOrEmpty(prerelease)) return false;
+
+            result = new SemVersion(nums[0], nums[1], nums[2], prerelease, buildMeta);
+            return true;
+        }
+
+        public static SemVersion Parse(string raw) {
+            SemVersion sem;
+            if (!TryParse(raw, out sem)) throw new FormatException("Invalid SemVer: " + raw);
+            return sem;
+        }
+
+        public int CompareTo(SemVersion other) {
+            if (ReferenceEquals(this, other)) return 0;
+            if (ReferenceEquals(null, other)) return 1;
+
+            if (Major != other.Major) return Major.CompareTo(other.Major);
+            if (Minor != other.Minor) return Minor.CompareTo(other.Minor);
+            if (Patch != other.Patch) return Patch.CompareTo(other.Patch);
+
+            if (IsPrerelease && !other.IsPrerelease) return -1;
+            if (!IsPrerelease && other.IsPrerelease) return 1;
+            if (!IsPrerelease && !other.IsPrerelease) return 0;
+
+            string[] aIds = Prerelease.Split('.');
+            string[] bIds = other.Prerelease.Split('.');
+            int minLen = Math.Min(aIds.Length, bIds.Length);
+            for (int i = 0; i < minLen; i++) {
+                string aId = aIds[i];
+                string bId = bIds[i];
+                int aNum, bNum;
+                bool aIsNum = int.TryParse(aId, out aNum);
+                bool bIsNum = int.TryParse(bId, out bNum);
+                if (aIsNum && bIsNum) {
+                    if (aNum != bNum) return aNum.CompareTo(bNum);
+                } else if (aIsNum) {
+                    return -1;
+                } else if (bIsNum) {
+                    return 1;
+                } else {
+                    int cmp = string.Compare(aId, bId, StringComparison.Ordinal);
+                    if (cmp != 0) return cmp;
+                }
+            }
+            return aIds.Length.CompareTo(bIds.Length);
+        }
+
+        public bool Equals(SemVersion other) {
+            if (ReferenceEquals(null, other)) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return Major == other.Major && Minor == other.Minor && Patch == other.Patch &&
+                   string.Equals(Prerelease, other.Prerelease, StringComparison.Ordinal);
+        }
+
+        public override bool Equals(object obj) {
+            return Equals(obj as SemVersion);
+        }
+
+        public override int GetHashCode() {
+            unchecked {
+                int hash = (Major * 397) ^ (Minor * 17) ^ Patch;
+                hash = (hash * 397) ^ (Prerelease != null ? StringComparer.Ordinal.GetHashCode(Prerelease) : 0);
+                return hash;
+            }
+        }
+
+        public override string ToString() {
+            var sb = new StringBuilder();
+            sb.Append(Major).Append('.').Append(Minor).Append('.').Append(Patch);
+            if (!string.IsNullOrEmpty(Prerelease)) sb.Append('-').Append(Prerelease);
+            if (!string.IsNullOrEmpty(BuildMetadata)) sb.Append('+').Append(BuildMetadata);
+            return sb.ToString();
+        }
+
+        public static bool operator <(SemVersion left, SemVersion right) {
+            return Comparer<SemVersion>.Default.Compare(left, right) < 0;
+        }
+        public static bool operator >(SemVersion left, SemVersion right) {
+            return Comparer<SemVersion>.Default.Compare(left, right) > 0;
+        }
+        public static bool operator <=(SemVersion left, SemVersion right) {
+            return Comparer<SemVersion>.Default.Compare(left, right) <= 0;
+        }
+        public static bool operator >=(SemVersion left, SemVersion right) {
+            return Comparer<SemVersion>.Default.Compare(left, right) >= 0;
+        }
+        public static bool operator ==(SemVersion left, SemVersion right) {
+            return Equals(left, right);
+        }
+        public static bool operator !=(SemVersion left, SemVersion right) {
+            return !Equals(left, right);
+        }
+    }
+
     public static class AppUpdater {
         public const string Owner = "yashwantmandal26";
         public const string Repo = "GTBookEssentials";
@@ -57,6 +195,15 @@ namespace GTBook {
             return "v" + v.Major + "." + v.Minor;
         }
 
+        public static string FormatSemVersion(SemVersion v) {
+            if (v == null) return "v0.0";
+            var sb = new StringBuilder("v");
+            sb.Append(v.Major).Append('.').Append(v.Minor);
+            if (v.Patch > 0 || v.IsPrerelease) sb.Append('.').Append(v.Patch);
+            if (v.IsPrerelease) sb.Append('-').Append(v.Prerelease);
+            return sb.ToString();
+        }
+
         public static Version ParseVersion(string raw) {
             if (string.IsNullOrWhiteSpace(raw)) return null;
             string clean = raw.Trim();
@@ -76,10 +223,21 @@ namespace GTBook {
         }
 
         public static bool IsNewer(string remoteTag, Version current) {
-            Version remote = ParseVersion(remoteTag);
-            if (remote == null || current == null) return false;
-            var cur = new Version(current.Major, current.Minor, Math.Max(0, current.Build), Math.Max(0, current.Revision));
-            return remote > cur;
+            return IsNewer(remoteTag, current, false);
+        }
+
+        public static bool IsNewer(string remoteTag, Version current, bool allowPrerelease) {
+            if (current == null) return false;
+            SemVersion cur = new SemVersion(current.Major, current.Minor, Math.Max(0, current.Build));
+            return IsNewer(remoteTag, cur, allowPrerelease);
+        }
+
+        public static bool IsNewer(string remoteTag, SemVersion current, bool allowPrerelease = false) {
+            if (current == null) return false;
+            SemVersion remote;
+            if (!SemVersion.TryParse(remoteTag, out remote)) return false;
+            if (!allowPrerelease && remote.IsPrerelease) return false;
+            return remote > current;
         }
 
         public static bool IsTrustedDownloadUrl(string url) {
@@ -119,8 +277,18 @@ namespace GTBook {
         }
 
         public static UpdateCheckResult ParseReleaseJson(string json, Version current = null) {
+            return ParseReleaseJson(json, current, false);
+        }
+
+        public static UpdateCheckResult ParseReleaseJson(string json, Version current, bool allowPrerelease) {
             var cur = current ?? CurrentVersion;
-            var result = new UpdateCheckResult { CurrentVersion = FormatVersion(cur) };
+            SemVersion curSem = new SemVersion(cur.Major, cur.Minor, Math.Max(0, cur.Build));
+            return ParseReleaseJson(json, curSem, allowPrerelease);
+        }
+
+        public static UpdateCheckResult ParseReleaseJson(string json, SemVersion current, bool allowPrerelease = false) {
+            var cur = current ?? new SemVersion(CurrentVersion.Major, CurrentVersion.Minor, Math.Max(0, CurrentVersion.Build));
+            var result = new UpdateCheckResult { CurrentVersion = FormatSemVersion(cur) };
             if (string.IsNullOrWhiteSpace(json)) {
                 result.Error = "Empty response from GitHub.";
                 return result;
@@ -132,19 +300,22 @@ namespace GTBook {
             }
             bool draft = dict.ContainsKey("draft") && Convert.ToBoolean(dict["draft"]);
             bool prerelease = dict.ContainsKey("prerelease") && Convert.ToBoolean(dict["prerelease"]);
-            if (draft || prerelease) {
+            string tag = dict.ContainsKey("tag_name") ? Convert.ToString(dict["tag_name"]) ?? "" : "";
+            SemVersion remoteSem;
+            bool parsedSem = SemVersion.TryParse(tag, out remoteSem);
+            bool isPrerelease = prerelease || (parsedSem && remoteSem.IsPrerelease);
+
+            if (draft || (!allowPrerelease && isPrerelease)) {
                 result.Checked = true;
                 result.Summary = "You're up to date (" + result.CurrentVersion + ").";
                 return result;
             }
-            string tag = dict.ContainsKey("tag_name") ? Convert.ToString(dict["tag_name"]) ?? "" : "";
             string name = dict.ContainsKey("name") ? Convert.ToString(dict["name"]) ?? "" : "";
             string body = dict.ContainsKey("body") ? Convert.ToString(dict["body"]) ?? "" : "";
             string html = dict.ContainsKey("html_url") ? Convert.ToString(dict["html_url"]) ?? ReleasesPageUrl : ReleasesPageUrl;
             string published = dict.ContainsKey("published_at") ? Convert.ToString(dict["published_at"]) ?? "" : "";
             result.TagName = tag;
-            Version parsed = ParseVersion(tag);
-            result.LatestVersion = parsed != null ? FormatVersion(parsed) : tag;
+            result.LatestVersion = parsedSem ? FormatSemVersion(remoteSem) : (ParseVersion(tag) != null ? FormatVersion(ParseVersion(tag)) : tag);
             result.ReleaseTitle = string.IsNullOrWhiteSpace(name) ? result.LatestVersion : name.Trim();
             result.ReleaseNotes = body.Trim();
             result.HtmlUrl = IsTrustedDownloadUrl(html) ? html : ReleasesPageUrl;
@@ -183,7 +354,7 @@ namespace GTBook {
                 }
             }
 
-            result.UpdateAvailable = IsNewer(tag, cur);
+            result.UpdateAvailable = IsNewer(tag, cur, allowPrerelease);
             result.Summary = result.UpdateAvailable
                 ? "New version " + result.LatestVersion + " is available on GitHub (current: " + result.CurrentVersion + ")."
                 : "You're up to date (" + result.CurrentVersion + ").";
@@ -269,14 +440,7 @@ namespace GTBook {
         }
 
         static void CleanupOldUpdates(string updatesDir) {
-            try {
-                foreach (string file in Directory.GetFiles(updatesDir)) {
-                    try { File.Delete(file); } catch {}
-                }
-                foreach (string dir in Directory.GetDirectories(updatesDir, "extract-*")) {
-                    try { Directory.Delete(dir, true); } catch {}
-                }
-            } catch {}
+            UpdateStaging.SafeCleanup(updatesDir);
         }
 
         internal static string ResolveExpectedSha256(string inlineSha256, string sha256AssetUrl, Func<string, string> fetchText) {
@@ -301,8 +465,8 @@ namespace GTBook {
                 if (info == null || string.IsNullOrEmpty(info.DownloadUrl) || !IsTrustedDownloadUrl(info.DownloadUrl)) {
                     throw new InvalidOperationException("No downloadable release package was found in the GitHub release.");
                 }
-                string updatesDir = Path.Combine(Store.DirectoryPath, "updates");
-                Directory.CreateDirectory(updatesDir);
+                string updatesDir = UpdateStaging.RootPath;
+                UpdateStaging.EnsureSecureDirectory(updatesDir, allowTestFixture: !UpdateStaging.IsElevated());
                 CleanupOldUpdates(updatesDir);
                 string safeName = Path.GetFileName(info.AssetName);
                 if (string.IsNullOrWhiteSpace(safeName)) safeName = "GTBOOK-Essentials-Setup.exe";
@@ -310,6 +474,7 @@ namespace GTBook {
                 string tempFile = Path.Combine(updatesDir, safeName + "." + Guid.NewGuid().ToString("N") + ".part");
                 string finalFile = Path.Combine(updatesDir, safeName);
 
+                string expectedHash;
                 try {
                     var req = CreateRequest(info.DownloadUrl, "application/octet-stream");
                     req.Timeout = 30000;
@@ -334,7 +499,7 @@ namespace GTBook {
                         }
                     }
 
-                    string expectedHash = ResolveExpectedSha256(info.ExpectedSha256, info.Sha256AssetUrl, FetchText);
+                    expectedHash = ResolveExpectedSha256(info.ExpectedSha256, info.Sha256AssetUrl, FetchText);
                     string actualHash = ComputeSha256(tempFile);
                     if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase)) {
                         throw new IOException("Update checksum mismatch. Expected " + expectedHash + ", got " + actualHash + ".");
@@ -347,21 +512,23 @@ namespace GTBook {
                     throw;
                 }
 
+                // Verify the final protected payload inside secure staging before execution
+                UpdateStaging.VerifyPayloadFile(finalFile, expectedHash, updatesDir);
+
                 if (finalFile.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) {
                     Process.Start(new ProcessStartInfo(finalFile) { UseShellExecute = true });
                 } else if (finalFile.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) {
                     string extractDir = Path.Combine(updatesDir, "extract-" + Guid.NewGuid().ToString("N"));
-                    Directory.CreateDirectory(extractDir);
-                    string expandArgs = "-NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -LiteralPath '" + finalFile.Replace("'", "''") + "' -DestinationPath '" + extractDir.Replace("'", "''") + "' -Force\"";
-                    using (var expand = Process.Start(new ProcessStartInfo("powershell.exe", expandArgs) { UseShellExecute = false, CreateNoWindow = true })) {
-                        expand.WaitForExit();
-                        if (expand.ExitCode != 0) throw new IOException("Could not extract the downloaded update package.");
-                    }
+                    UpdateStaging.EnsureSecureDirectory(extractDir, allowTestFixture: !UpdateStaging.IsElevated());
+                    UpdateStaging.ExtractZipSafely(finalFile, extractDir);
                     string[] installers = Directory.GetFiles(extractDir, "Install.ps1", SearchOption.AllDirectories);
                     if (installers.Length == 0) throw new IOException("Downloaded ZIP does not contain Install.ps1.");
-                    Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + installers[0] + "\"") {
+                    string installerPath = Path.GetFullPath(installers[0]);
+                    UpdateStaging.AssertPathLineageNotReparsePoint(installerPath);
+                    string powershellPath = UpdateStaging.ResolveSystemExecutable("powershell.exe");
+                    Process.Start(new ProcessStartInfo(powershellPath, "-NoProfile -ExecutionPolicy Bypass -File \"" + installerPath + "\"") {
                         UseShellExecute = true,
-                        WorkingDirectory = Path.GetDirectoryName(installers[0])
+                        WorkingDirectory = Path.GetDirectoryName(installerPath)
                     });
                 } else {
                     Process.Start(new ProcessStartInfo(info.HtmlUrl) { UseShellExecute = true });

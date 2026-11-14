@@ -27,6 +27,7 @@ namespace GTBook {
         RectangleF prevPageBounds = RectangleF.Empty;
         RectangleF nextPageBounds = RectangleF.Empty;
         readonly List<SpecItem> items = new List<SpecItem>();
+        internal List<SpecItem> Items { get { return items; } }
         string footerTimestamp = "";
         string lastMeasuredTime = "";
 

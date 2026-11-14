@@ -21,7 +21,8 @@ jobs:
         shell: powershell
         run: |
           $tag = $env:GITHUB_REF_NAME
-          $ver = ($tag -replace '^[vV]', '') -replace '[-+].*$', ''
+          $fullVer = $tag -replace '^[vV]', ''
+          $ver = $fullVer -replace '[-+].*$', ''
           $rawParts = $ver.Split('.')
           $parts = @()
           foreach ($seg in $rawParts) {
@@ -35,7 +36,7 @@ jobs:
           $id = Get-Content .\src\AppIdentity.cs -Raw
           $id = $id -replace 'AssemblyVersion\("[^"]*"\)', "AssemblyVersion(`"$asmVer`")"
           $id = $id -replace 'AssemblyFileVersion\("[^"]*"\)', "AssemblyFileVersion(`"$asmVer`")"
-          $id = $id -replace 'AssemblyInformationalVersion\("[^"]*"\)', "AssemblyInformationalVersion(`"$ver`")"
+          $id = $id -replace 'AssemblyInformationalVersion\("[^"]*"\)', "AssemblyInformationalVersion(`"$fullVer`")"
           $id | Set-Content .\src\AppIdentity.cs -NoNewline
       - name: Test and package
         shell: powershell
@@ -85,10 +86,15 @@ jobs:
           try {
             cmd /c "gh release view $tag --repo $repo >nul 2>&1"
             $exists = ($LASTEXITCODE -eq 0)
+            $isPrerelease = ($tag -match '-(rc|beta|alpha|preview)')
             if ($exists) {
               & gh release upload $tag @assets --repo $repo --clobber
             } else {
-              & gh release create $tag @assets --repo $repo --title "GTBOOK Essentials $tag" --generate-notes
+              if ($isPrerelease) {
+                & gh release create $tag @assets --repo $repo --title "GTBOOK Essentials $tag" --generate-notes --prerelease
+              } else {
+                & gh release create $tag @assets --repo $repo --title "GTBOOK Essentials $tag" --generate-notes
+              }
             }
             if ($LASTEXITCODE -ne 0) { throw "GitHub Release publish failed with exit code $LASTEXITCODE." }
           } finally {

@@ -32,7 +32,7 @@ namespace GTBook {
             int target=Raw(selection);oem.SetGPUMode(target);uint actual=0;
             for(int i=0;i<8;i++){delay(100);actual=oem.GetGPUMode();if(actual==target){
                 var reply=new Reply{Ok=true,Message=Names[selection]+" request saved and verified. Restart Windows to activate it."};
-                reply.Data["gpu-mode-requested"]=Names[selection];reply.Data["gpu-mode"]=Names[selection];reply.Data["gpu-restart-required"]="True";reply.Data["gpu-raw"]=target.ToString();return reply;
+                reply.Data["gpu-mode-requested"]=Names[selection];reply.Data["gpu-restart-required"]="True";reply.Data["gpu-raw"]=target.ToString();return reply;
             }}throw new IOException("GPU firmware request was not confirmed (read "+actual+"). Refresh before retrying; active GPU mode was not verified.");
         }
         public static Dictionary<string,object> VerifyRequests(){

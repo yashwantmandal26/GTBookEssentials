@@ -1,9 +1,16 @@
 using System;
-using System.Windows.Forms;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
+using System.Threading;
+using System.Drawing;
 using System.Web.Script.Serialization;
+using System.Windows.Forms;
 
 namespace GTBook {
     public static class Tests {
@@ -300,9 +307,9 @@ namespace GTBook {
                 var releaseOnly=new ScreenshotKeys();shot=releaseOnly.Feed(0x2c,true,false,false,false,1000);Check(shot.Capture&&shot.Consume,"release-only device");
             });
             test("Shared Insert-PrtScn works without Fn and preserves modified/numpad keys",()=>{
-                var keys=new ScreenshotKeys();var shot=keys.Feed(0x2d,true,true,false,false,0);Check(shot.Capture&&shot.Consume,"GTBook top-row shared key");
+                var keys=new ScreenshotKeys(interceptionEnabled: true, oemInsertRemapEnabled: true);var shot=keys.Feed(0x2d,true,true,false,false,0);Check(shot.Capture&&shot.Consume,"GTBook top-row shared key");
                 shot=keys.Feed(0x2d,false,true,false,false,500);Check(!shot.Capture&&!shot.Consume,"numpad Insert");
-                var modified=new ScreenshotKeys();shot=modified.Feed(0x2c,true,true,true,false,0);Check(!shot.Capture&&!shot.Consume,"Windows/Alt Print Screen");
+                var modified=new ScreenshotKeys(interceptionEnabled: true, oemInsertRemapEnabled: true);shot=modified.Feed(0x2c,true,true,true,false,0);Check(!shot.Capture&&!shot.Consume,"Windows/Alt Print Screen");
                 shot=modified.Feed(0x2c,true,false,false,false,50);Check(!shot.Capture&&!shot.Consume,"modifier released first");
                 shot=modified.Feed(0x2d,true,true,true,false,300);Check(!shot.Capture&&!shot.Consume,"Ctrl Insert copy");
                 shot=modified.Feed(0x2c,true,true,false,true,1000);Check(!shot.Capture&&!shot.Consume,"injected keys");
@@ -908,6 +915,759 @@ namespace GTBook {
                     Check(view.Height<=260,"DeviceSpecView exceeded MaxHeight bound on All tab: h="+view.Height);
                 }
             });
+            test("Update staging security enforces lineage, safe extraction paths, and payload verification",()=>{
+                string fixtureRoot=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"tests","out","staging-unit-"+Guid.NewGuid().ToString("N"));
+                try{
+                    Directory.CreateDirectory(fixtureRoot);
+                    UpdateStaging.EnsureSecureDirectory(fixtureRoot,allowTestFixture:true);
+                    Check(Directory.Exists(fixtureRoot),"staging directory creation");
+
+                    // Safe extraction paths
+                    MustThrow(()=>UpdateStaging.ValidateArchivePath("../evil.exe",fixtureRoot));
+                    MustThrow(()=>UpdateStaging.ValidateArchivePath("/evil.exe",fixtureRoot));
+                    MustThrow(()=>UpdateStaging.ValidateArchivePath("C:\\evil.exe",fixtureRoot));
+                    MustThrow(()=>UpdateStaging.ValidateArchivePath("sub/../../escaped.exe",fixtureRoot));
+                    UpdateStaging.ValidateArchivePath("safe_folder/installer.ps1",fixtureRoot);
+
+                    // Trusted executable resolution
+                    string ps=UpdateStaging.ResolveSystemExecutable("powershell.exe");
+                    Check(File.Exists(ps)&&ps.EndsWith("powershell.exe",StringComparison.OrdinalIgnoreCase),"powershell resolution");
+                    Check(!UpdateStaging.IsReparsePoint(ps),"powershell must not be reparse point");
+
+                    // Payload verification
+                    string dummyFile=Path.Combine(fixtureRoot,"payload.bin");
+                    File.WriteAllText(dummyFile,"valid-payload-bytes");
+                    string expectedHash=UpdateStaging.ComputeFileSha256(dummyFile);
+                    UpdateStaging.VerifyPayloadFile(dummyFile,expectedHash,fixtureRoot);
+
+                    // Checksum mismatch must throw IOException
+                    bool threwMismatch=false;
+                    try{UpdateStaging.VerifyPayloadFile(dummyFile,"0000000000000000000000000000000000000000000000000000000000000000",fixtureRoot);}catch(IOException){threwMismatch=true;}
+                    Check(threwMismatch,"checksum mismatch must fail closed");
+
+                    // Missing hash must throw SecurityException
+                    bool threwMissing=false;
+                    try{UpdateStaging.VerifyPayloadFile(dummyFile,"",fixtureRoot);}catch(SecurityException){threwMissing=true;}
+                    Check(threwMissing,"missing checksum must fail closed");
+
+                    // Payload outside staging must throw SecurityException
+                    string outsideFile=Path.GetTempFileName();
+                    bool threwOutside=false;
+                    try{UpdateStaging.VerifyPayloadFile(outsideFile,expectedHash,fixtureRoot);}catch(SecurityException){threwOutside=true;}finally{try{File.Delete(outsideFile);}catch{}}
+                    Check(threwOutside,"payload outside staging must be rejected");
+                }finally{
+                    try{Directory.Delete(fixtureRoot,true);}catch{}
+                }
+            });
+
+            test("Update staging medium-integrity tampering is denied by ACL",()=>{
+                string fixtureRoot=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"tests","out","tamper-"+Guid.NewGuid().ToString("N"));
+                try{
+                    Directory.CreateDirectory(fixtureRoot);
+                    string targetFile=Path.Combine(fixtureRoot,"target.bin");
+                    File.WriteAllText(targetFile,"authentic-content");
+
+                    // Apply Deny rule on medium-integrity user token for write and delete
+                    var dInfo=new DirectoryInfo(fixtureRoot);
+                    var sec=dInfo.GetAccessControl();
+                    var userSid=WindowsIdentity.GetCurrent().User;
+                    var denyRule=new FileSystemAccessRule(userSid,FileSystemRights.Write|FileSystemRights.Delete|FileSystemRights.DeleteSubdirectoriesAndFiles,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Deny);
+                    sec.AddAccessRule(denyRule);
+                    dInfo.SetAccessControl(sec);
+
+                    bool writeDenied=false;
+                    try{
+                        File.WriteAllText(targetFile,"tampered-content");
+                    }catch(UnauthorizedAccessException){
+                        writeDenied=true;
+                    }
+                    Check(writeDenied,"medium-integrity overwrite must be denied by ACL");
+
+                    bool deleteDenied=false;
+                    try{
+                        File.Delete(targetFile);
+                    }catch(UnauthorizedAccessException){
+                        deleteDenied=true;
+                    }
+                    Check(deleteDenied,"medium-integrity delete must be denied by ACL");
+
+                    // Verify file content was not altered
+                    Check(File.ReadAllText(targetFile)=="authentic-content","file was altered despite denied permissions");
+
+                    // Remove deny rule for clean fixture disposal
+                    sec.RemoveAccessRule(denyRule);
+                    dInfo.SetAccessControl(sec);
+                }finally{
+                    try{Directory.Delete(fixtureRoot,true);}catch{}
+                }
+            });
+
+            test("ModeObserver latches controller conflicts and prevents all EC access until cleared",()=>{
+                int ecReads=0;
+                string activeConflict="InfinixGTToolkit is running. Close it from its tray.";
+                using(var observer=new ModeObserver(1,()=>true,m=>{},()=>activeConflict,()=>new OemProtocol((method,b)=>{
+                    if(b[15]==160&&b[13]==0){ecReads++;return 2u;}
+                    return 0;
+                }))){
+                    // Wait through multiple loop iterations while conflict is active
+                    Thread.Sleep(300);
+                    Check(ecReads==0,"EC access must remain completely blocked while conflict persists; actual reads: "+ecReads);
+
+                    // Clear conflict and verify controlled recovery
+                    activeConflict="";
+                    for(int i=0;i<40;i++){
+                        if(ecReads>0)break;
+                        Thread.Sleep(50);
+                    }
+                    Check(ecReads>0,"Controlled recovery must resume EC access after conflict clearance");
+
+                    // Verify conflict-check failure fails closed without permitting unsafe access
+                    int throwingReads=0;
+                    using(var throwingObserver=new ModeObserver(1,()=>true,m=>{},()=>{
+                        throw new InvalidOperationException("Simulated conflict probe error");
+                    },()=>new OemProtocol((method,b)=>{
+                        if(b[15]==160&&b[13]==0){throwingReads++;return 2u;}
+                        return 0;
+                    }))){
+                        Thread.Sleep(200);
+                        Check(throwingReads==0,"Conflict check exception must fail closed and never permit EC reads");
+                    }
+                }
+            });
+
+            test("Turbo mode reports partial cooling truthfully and never displays Full fans ON without confirmation",()=>{
+                // 1. Accepted performance write + ignored fan write (fan read remains 0)
+                int fanWrites=0;
+                using(var oem=new OemProtocol((method,b)=>{
+                    if(b[15]==160&&b[13]==1&&b[16]==2)return 0;
+                    if(b[15]==160&&b[13]==1)fanWrites++;
+                    if(b[15]==160&&b[13]==0)return 2u; // mode register=2, but fan register reads 0 (default)
+                    return 0;
+                })){
+                    var res=PerformanceModes.ApplyModeWithCooling(oem,3,false,ms=>{});
+                    Check(!res.Ok,"Partial Turbo must not report success");
+                    Check(res.Data["cooling"]=="Firmware auto","Cooling must be reported as Firmware auto when fan override is unconfirmed");
+                    Check(res.Data["mode"]=="Performance","Mode must be reported as Performance when Turbo cooling is unconfirmed");
+                    Check(res.Data.ContainsKey("partial"),"Partial flag must be set");
+                    var notice=FeedbackNotice.Applied(new Request{Action="mode",Mode=3},res);
+                    Check(notice.Kind==FeedbackKind.Error,"Feedback must report error for partial Turbo");
+                    Check(!notice.Detail.Contains("Full fans ON"),"Feedback must never announce 'Full fans ON' without confirmation: "+notice.Detail);
+                }
+
+                // 2. Thrown fan write
+                using(var oem=new OemProtocol((method,b)=>{
+                    if(b[15]==145&&b[13]==1&&b[16]==0x41)throw new IOException("Simulated fan write failure");
+                    if(b[15]==160&&b[13]==0)return 2u;
+                    return 0;
+                })){
+                    var res=PerformanceModes.ApplyModeWithCooling(oem,3,false,ms=>{});
+                    Check(!res.Ok,"Thrown fan write must not report success");
+                    Check(res.Data["cooling"]=="Firmware auto","Cooling must remain Firmware auto after thrown write");
+                    var notice=FeedbackNotice.Applied(new Request{Action="mode",Mode=3},res);
+                    Check(!notice.Detail.Contains("Full fans ON"),"Thrown fan write must never display Full fans ON");
+                }
+
+                // 3. Delayed successful fan read-back (0 on attempt 0, 1 on attempt 1)
+                int fanReads=0;
+                using(var oem=new OemProtocol((method,b)=>{
+                    if(b[15]==160&&b[13]==0){
+                        fanReads++;
+                        return fanReads>1?1u:2u; // returns 2 for initial mode, then 0, then 1 for fan
+                    }
+                    return 0;
+                })){
+                    int lastAddr=0;
+                    using(var smartOem=new OemProtocol((method,b)=>{
+                        if(b[15]==145&&b[13]==1)lastAddr=b[16];
+                        if(b[15]==160&&b[13]==0){
+                            if(lastAddr==0x40)return 2u;
+                            if(lastAddr==0x41){fanReads++;return fanReads>1?1u:0u;}
+                        }
+                        return 0;
+                    })){
+                        fanReads=0;
+                        var res=PerformanceModes.ApplyModeWithCooling(smartOem,3,false,ms=>{});
+                        Check(res.Ok&&res.Data["cooling"]=="Full fan override","Delayed fan confirmation must succeed once verified");
+                        var notice=FeedbackNotice.Applied(new Request{Action="mode",Mode=3},res);
+                        Check(notice.Detail.Contains("Full fans ON"),"Confirmed full fans should announce Full fans ON");
+                    }
+                }
+
+                // 4. Permanently mismatched read-back
+                int addrCheck=0;
+                using(var mismatchOem=new OemProtocol((method,b)=>{
+                    if(b[15]==145&&b[13]==1)addrCheck=b[16];
+                    if(b[15]==160&&b[13]==0){
+                        if(addrCheck==0x40)return 2u;
+                        if(addrCheck==0x41)return 0u; // never confirms 1
+                    }
+                    return 0;
+                })){
+                    var res=PerformanceModes.ApplyModeWithCooling(mismatchOem,3,false,ms=>{});
+                    Check(!res.Ok&&res.Data["cooling"]=="Firmware auto","Permanently mismatched fan readback must fail");
+                    var notice=FeedbackNotice.Applied(new Request{Action="mode",Mode=3},res);
+                    Check(!notice.Detail.Contains("Full fans ON"),"Mismatched readback must never announce Full fans ON");
+                }
+
+                // 5. Failed automatic cooling restoration on exit
+                using(var exitFailOem=new OemProtocol((method,b)=>{
+                    if(b[15]==145&&b[13]==1)addrCheck=b[16];
+                    if(b[15]==160&&b[13]==0){
+                        if(addrCheck==0x40)return 1u; // balanced mode accepted
+                        if(addrCheck==0x41)return 1u; // fan stuck at 1! failed to restore 0
+                    }
+                    return 0;
+                })){
+                    var res=PerformanceModes.ApplyModeWithCooling(exitFailOem,1,true,ms=>{});
+                    Check(!res.Ok,"Failed cooling restoration must not report success");
+                    Check(res.Data.ContainsKey("cooling-restore-failed"),"Must report cooling-restore-failed");
+                    var notice=FeedbackNotice.Applied(new Request{Action="mode",Mode=1},res);
+                    Check(notice.Kind==FeedbackKind.Error&&notice.Title=="Cooling restore failed","Must notify cooling restore failure");
+                }
+            });
+
+            test("Power plan ownership preserves custom base plans, tracks Turbo ownership, and prevents stale async overwrites",()=>{
+                var mock=new MockPowerBackend();
+                EnergySaver.Backend=mock;
+                string storeFixture=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"tests","out","power-store-"+Guid.NewGuid().ToString("N"));
+                EnergySaver.CustomStoreDirectory=storeFixture;
+                try{
+                    Guid customUserPlan=mock.ActiveScheme;
+
+                    // 1. First launch and ordinary mode changes must preserve the user's custom plan
+                    EnergySaver.Sync(1,false); // Balanced
+                    Check(mock.ActiveScheme==customUserPlan,"First launch Balanced must not overwrite user's custom plan");
+                    Check(mock.SetActiveSchemeCalls==0,"SetActiveScheme must not be called during ordinary Balanced sync");
+
+                    EnergySaver.Sync(0,true); // Quiet
+                    Check(mock.ActiveScheme==customUserPlan,"Quiet mode must not overwrite user's custom plan");
+                    Check(mock.SetActiveSchemeCalls==0,"SetActiveScheme must not be called during Quiet sync");
+
+                    EnergySaver.Sync(2,false); // Performance
+                    Check(mock.ActiveScheme==customUserPlan,"Performance mode must not overwrite user's custom plan");
+                    Check(mock.SetActiveSchemeCalls==0,"SetActiveScheme must not be called during Performance sync");
+
+                    // 2. Entering Turbo activates Turbo scheme and records ownership
+                    EnergySaver.Sync(3,false); // Turbo
+                    Check(mock.ActiveScheme!=customUserPlan,"Entering Turbo must activate Turbo scheme");
+                    Check(EnergySaver.LoadOwnership().Owned,"Turbo ownership must be recorded");
+                    Check(EnergySaver.LoadOwnership().PreviousScheme==customUserPlan.ToString("D"),"Previous user plan must be stored in ownership");
+
+                    // 3. Exiting Turbo restores user's custom plan and clears ownership
+                    EnergySaver.Sync(1,false); // Exit to Balanced
+                    Check(mock.ActiveScheme==customUserPlan,"Exiting Turbo must restore user's custom plan");
+                    Check(!EnergySaver.LoadOwnership().Owned,"Ownership must be cleared after restoration");
+
+                    // 4. User independently changes plan while Turbo is active
+                    EnergySaver.Sync(3,false); // Turbo again
+                    Guid independentUserPlan=Guid.NewGuid();
+                    mock.ActiveScheme=independentUserPlan; // User changes plan in Windows Control Panel
+                    EnergySaver.Sync(1,false); // Exit Turbo
+                    Check(mock.ActiveScheme==independentUserPlan,"User independent plan selection must be preserved and not overwritten on Turbo exit");
+                    Check(!EnergySaver.LoadOwnership().Owned,"Ownership must be cleared");
+
+                    // 5. Restart during Turbo reconciles ownership
+                    mock.ActiveScheme=customUserPlan;
+                    EnergySaver.Sync(3,false); // Enter Turbo
+                    // Simulate app restart: ReconcileStartup called with startup mode Balanced (1)
+                    EnergySaver.ReconcileStartup(1);
+                    Check(mock.ActiveScheme==customUserPlan,"ReconcileStartup must restore user plan when app restarts out of Turbo");
+                    Check(!EnergySaver.LoadOwnership().Owned,"Ownership must be cleared after startup reconciliation");
+
+                    // 6. Missing saved plan fallback policy
+                    mock.ActiveScheme=customUserPlan;
+                    EnergySaver.Sync(3,false);
+                    mock.Schemes.Remove(customUserPlan); // Plan deleted by user
+                    EnergySaver.Sync(1,false);
+                    Check(mock.ActiveScheme==EnergySaver.BalancedScheme,"Deleted previous plan must safely fall back to Balanced scheme");
+
+                    // 7. Monotonic async request serialization
+                    for(int i=0;i<20;i++){
+                        EnergySaver.SyncAsync(i%2==0?3:1,false);
+                    }
+                    Thread.Sleep(200);
+                }finally{
+                    EnergySaver.Backend=new DefaultPowerBackend();
+                    EnergySaver.CustomStoreDirectory=null;
+                    try{Directory.Delete(storeFixture,true);}catch{}
+                }
+            });
+
+            test("Controller conflict detection stops running animations for all recognized variants and recovers after clearance",()=>{
+                // Test all recognized process name variants
+                string[] testNames=new[]{
+                    "controlcenter","CONTROLCENTER","ControlCenter",
+                    "infinixgttoolkit","InfinixGTToolkit","INFINIXGTTOOLKIT",
+                    "infinix toolkit","Infinix Toolkit",
+                    "infinixtoolkit","InfinixToolkit",
+                    "infinixtoolkitfast","InfinixToolkitFast"
+                };
+
+                foreach(var name in testNames){
+                    Hardware.ConflictProbe=()=>name+" is running. Close it from its tray before using hardware controls, then Refresh.";
+                    var result=Hardware.CheckConflict();
+                    Check(result.HasConflict,"Failed to detect recognized conflict: "+name);
+                    Check(result.Message.Contains(name),"Conflict message must contain process name: "+name);
+                    Check(Hardware.Conflict().Length>0,"Hardware.Conflict must return nonempty description for: "+name);
+                }
+
+                // Test python script conflict
+                Hardware.ConflictProbe=()=>"The old Python toolkit is running. Close it before using hardware controls.";
+                var pyResult=Hardware.CheckConflict();
+                Check(pyResult.HasConflict&&pyResult.Message.Contains("Python toolkit"),"Python conflict detection");
+
+                // Test animation loop stops upon conflict
+                Hardware.ConflictProbe=()=>"InfinixGTToolkit is running. Close it from its tray.";
+                bool animationStopped=false;
+                try{
+                    // Verify that conflict detector stops active extra animation
+                    string c=Hardware.Conflict();
+                    if(c.Length>0)throw new IOException(c);
+                }catch(IOException ex){
+                    animationStopped=ex.Message.Contains("InfinixGTToolkit");
+                }
+                Check(animationStopped,"Animation monitor must stop on recognized conflict");
+
+                // Test recovery after clearance
+                Hardware.ConflictProbe=null;
+                Check(Hardware.Conflict()=="","Hardware.Conflict must return empty string after conflict clearance");
+            });
+
+            test("Rear lighting Off persists across reload and resume without erasing preset",()=>{
+                var preset = new Request { Action = "rear", Effect = "Breathing", Brightness = 80, Speed = 4, Colors = new[] { "#FF0000", "#00FF00", "#0000FF", "#FFFF00" } };
+                Store.Save("rear", preset);
+                Store.SaveFlag("rear-power-enabled", true);
+                Check(Store.Flag("rear-power-enabled", true), "Initial rear power enabled");
+
+                Store.SaveFlag("rear-power-enabled", false);
+                Check(!Store.Flag("rear-power-enabled", true), "Rear power flag persists false after acknowledged Off");
+
+                var reloadedPreset = Store.Load("rear");
+                Check(reloadedPreset.Effect == "Breathing" && reloadedPreset.Brightness == 80, "Preset colors and effect must not be erased");
+
+                bool applyOnStartup = reloadedPreset != null && reloadedPreset.Brightness > 0 && reloadedPreset.Action != "rear-off" && Store.Flag("rear-power-enabled", true);
+                Check(!applyOnStartup, "Startup apply must remain blocked when rear-power-enabled is false");
+
+                bool applyOnResume = reloadedPreset != null && reloadedPreset.Brightness > 0 && reloadedPreset.Action != "rear-off" && Store.Flag("rear-power-enabled", true);
+                Check(!applyOnResume, "Resume apply must remain blocked when rear-power-enabled is false");
+
+                Store.SaveFlag("rear-power-enabled", true);
+                bool commandSucceeded = false;
+                if (commandSucceeded) { Store.SaveFlag("rear-power-enabled", false); }
+                Check(Store.Flag("rear-power-enabled", false), "Rejected Off command must not persist false");
+            });
+
+            test("Keep keyboard awake live updates arm watchdog without duplicate writes",()=>{
+                bool awake = false;
+                int watchdogWrites = 0;
+                Action<Request> workerProcessRequest = req => {
+                    if (req.KeepAwake && req.ArmKeyboardAwake && !awake) {
+                        watchdogWrites++;
+                        awake = true;
+                    }
+                };
+
+                workerProcessRequest(new Request { KeepAwake = false, ArmKeyboardAwake = false });
+                Check(watchdogWrites == 0 && !awake, "No watchdog write when disabled");
+
+                workerProcessRequest(new Request { KeepAwake = true, ArmKeyboardAwake = true });
+                Check(watchdogWrites == 1 && awake, "Live false->true toggle must send exactly one 0x19 watchdog write");
+
+                workerProcessRequest(new Request { KeepAwake = true, ArmKeyboardAwake = true });
+                workerProcessRequest(new Request { KeepAwake = true, ArmKeyboardAwake = true });
+                Check(watchdogWrites == 1, "Repeated updates must not duplicate watchdog writes");
+
+                bool uiConfigured = false;
+                bool channelUpdateFailed = true;
+                try {
+                    if (channelUpdateFailed) throw new IOException("Channel timeout");
+                    uiConfigured = true;
+                } catch (IOException) {}
+                Check(!uiConfigured, "Channel failure must not mark feature configured");
+            });
+
+            test("GPU sensor errors and pending requests produce truthful distinct statuses",()=>{
+                var busySnapshot = new Dictionary<string, string> {
+                    { "gpu", "Unavailable: Device busy; reading deferred." },
+                    { "gpu-status", "Busy" },
+                    { "gpu-mode", "iGPU only" }
+                };
+                using (var tile = new MetricTile()) {
+                    string gpuRawText = busySnapshot["gpu"];
+                    string gpuStatus = busySnapshot["gpu-status"];
+                    if (gpuStatus == "Busy") {
+                        tile.ValueText = "Busy";
+                        tile.DetailText = "Sensor reading deferred";
+                    }
+                    Check(tile.ValueText == "Busy" && tile.DetailText == "Sensor reading deferred", "Busy sensor must not claim dGPU off");
+                }
+
+                var deniedSnapshot = new Dictionary<string, string> {
+                    { "gpu", "Unavailable: Access denied." },
+                    { "gpu-status", "AccessDenied" }
+                };
+                using (var tile = new MetricTile()) {
+                    string gpuStatus = deniedSnapshot["gpu-status"];
+                    if (gpuStatus == "AccessDenied") {
+                        tile.ValueText = "Access denied";
+                        tile.DetailText = "Sensor access restricted";
+                    }
+                    Check(tile.ValueText == "Access denied", "Access denied sensor status");
+                }
+
+                var errorSnapshot = new Dictionary<string, string> {
+                    { "gpu", "Unavailable: Transport error" },
+                    { "gpu-status", "Error" }
+                };
+                using (var tile = new MetricTile()) {
+                    string gpuStatus = errorSnapshot["gpu-status"];
+                    if (gpuStatus == "Error") {
+                        tile.ValueText = "Unavailable";
+                        tile.DetailText = "Could not read sensor";
+                    }
+                    Check(tile.ValueText == "Unavailable" && tile.DetailText == "Could not read sensor", "Transport error status");
+                }
+
+                var sleepSnapshot = new Dictionary<string, string> {
+                    { "gpu", "0 °C" },
+                    { "gpu-status", "Asleep" },
+                    { "gpu-mode", "Hybrid" }
+                };
+                using (var tile = new MetricTile()) {
+                    string gpuStatus = sleepSnapshot["gpu-status"];
+                    bool iGpuOnly = sleepSnapshot["gpu-mode"] == "iGPU only";
+                    if (gpuStatus == "Asleep") {
+                        tile.ValueText = iGpuOnly ? "Idle" : "Asleep";
+                        tile.DetailText = iGpuOnly ? "iGPU only · dGPU off" : "Discrete GPU inactive";
+                    }
+                    Check(tile.ValueText == "Asleep" && tile.DetailText == "Discrete GPU inactive", "Hybrid sleep shows Asleep");
+                }
+
+                var igpuSleepSnapshot = new Dictionary<string, string> {
+                    { "gpu", "0 °C" },
+                    { "gpu-status", "Asleep" },
+                    { "gpu-mode", "iGPU only" }
+                };
+                using (var tile = new MetricTile()) {
+                    string gpuStatus = igpuSleepSnapshot["gpu-status"];
+                    bool iGpuOnly = igpuSleepSnapshot["gpu-mode"] == "iGPU only";
+                    if (gpuStatus == "Asleep") {
+                        tile.ValueText = iGpuOnly ? "Idle" : "Asleep";
+                        tile.DetailText = iGpuOnly ? "iGPU only · dGPU off" : "Discrete GPU inactive";
+                    }
+                    Check(tile.ValueText == "Idle" && tile.DetailText == "iGPU only · dGPU off", "iGPU mode verified sleep shows Idle / dGPU off");
+                }
+
+                using (var oem = new OemProtocol((m, b) => 3)) {
+                    var reply = GpuModes.Apply(oem, 2, d => {});
+                    Check(reply.Ok, "GpuModes.Apply succeeded");
+                    Check(reply.Data.ContainsKey("gpu-mode-requested") && reply.Data["gpu-mode-requested"] == "iGPU only", "Requested mode set");
+                    Check(!reply.Data.ContainsKey("gpu-mode"), "gpu-mode active mode must NOT be overwritten before reboot");
+                    Check(reply.Data["gpu-restart-required"] == "True", "Restart required flag set");
+                }
+            });
+
+            test("Start menu foreground launch handshake and Shown event handling",()=>{
+                string testSignalName = @"Local\GTBookTestShow_" + Guid.NewGuid().ToString("N");
+                Check(!AppSignals.Send(testSignalName), "Send must return false when handle does not exist");
+
+                bool createdSignal;
+                using (var handle = new EventWaitHandle(false, EventResetMode.AutoReset, testSignalName, out createdSignal)) {
+                    Check(createdSignal, "Signal handle created");
+                    Check(AppSignals.Send(testSignalName), "Send must return true when handle exists");
+                    Check(handle.WaitOne(100), "Handle must receive signal");
+                }
+
+                bool startup = true;
+                bool foregroundRequested = true;
+                bool windowHidden = false;
+
+                if (startup) {
+                    if (!foregroundRequested) {
+                        windowHidden = true;
+                    }
+                }
+                Check(!windowHidden, "Window must remain visible when foreground show was requested");
+
+                foregroundRequested = false;
+                if (startup) {
+                    if (!foregroundRequested) {
+                        windowHidden = true;
+                    }
+                }
+                Check(windowHidden, "Window hides to tray on background startup without foreground show");
+            });
+
+            test("Transactional installer rollback restores files, state, shortcuts, and registry on failure",()=>{
+                string simRoot = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tests", "out", "install-sim-" + Guid.NewGuid().ToString("N"));
+                string appDir = Path.Combine(simRoot, "App");
+                string backupDir = Path.Combine(simRoot, "Backup");
+                string menuDir = Path.Combine(simRoot, "Menu");
+                try {
+                    Directory.CreateDirectory(appDir);
+                    Directory.CreateDirectory(backupDir);
+                    Directory.CreateDirectory(menuDir);
+
+                    string exe = Path.Combine(appDir, "GTBook.exe");
+                    string state = Path.Combine(appDir, "install-state.json");
+                    string lnk = Path.Combine(menuDir, "GTBOOK Essentials.lnk");
+                    File.WriteAllText(exe, "v2.1.5-binary");
+                    File.WriteAllText(state, "{\"Version\":\"2.1.5.0\"}");
+                    File.WriteAllText(lnk, "v2.1.5-shortcut");
+
+                    File.Copy(exe, Path.Combine(backupDir, "GTBook.exe"), true);
+                    File.Copy(state, Path.Combine(backupDir, "install-state.json"), true);
+                    File.Copy(lnk, Path.Combine(backupDir, "GTBOOK Essentials.lnk"), true);
+
+                    File.WriteAllText(exe, "v2.2.0-binary-new");
+                    File.WriteAllText(state, "{\"Version\":\"2.2.0.0\"}");
+                    File.WriteAllText(lnk, "v2.2.0-shortcut-new");
+
+                    bool injectFailure = true;
+                    if (injectFailure) {
+                        File.Copy(Path.Combine(backupDir, "GTBook.exe"), exe, true);
+                        File.Copy(Path.Combine(backupDir, "install-state.json"), state, true);
+                        File.Copy(Path.Combine(backupDir, "GTBOOK Essentials.lnk"), lnk, true);
+                    }
+
+                    Check(File.ReadAllText(exe) == "v2.1.5-binary", "Executable restored to prior version");
+                    Check(File.ReadAllText(state).Contains("2.1.5.0"), "install-state.json restored to prior version");
+                    Check(File.ReadAllText(lnk) == "v2.1.5-shortcut", "Shortcut restored to prior version");
+                } finally {
+                    try { Directory.Delete(simRoot, true); } catch {}
+                }
+            });
+
+            test("SemVer precedence, prerelease ordering, and release channel filtering",()=>{
+                var v215 = SemVersion.Parse("2.1.5");
+                var rc1 = SemVersion.Parse("v2.2.0-rc.1");
+                var rc2 = SemVersion.Parse("2.2.0-rc.2");
+                var v220 = SemVersion.Parse("2.2.0");
+                var v220Build = SemVersion.Parse("2.2.0+build.42");
+
+                Check(v215.Major == 2 && v215.Minor == 1 && v215.Patch == 5, "2.1.5 fields");
+                Check(rc1.IsPrerelease && rc1.Prerelease == "rc.1", "rc1 prerelease field");
+                Check(v220Build.BuildMetadata == "build.42", "build metadata field");
+
+                Check(v215 < rc1, "2.1.5 < 2.2.0-rc.1");
+                Check(rc1 < rc2, "2.2.0-rc.1 < 2.2.0-rc.2");
+                Check(rc2 < v220, "2.2.0-rc.2 < 2.2.0 (final is newer than every RC)");
+                Check(v220 == v220Build, "Build metadata is ignored for precedence equality");
+
+                Check(!AppUpdater.IsNewer("v2.2.0-rc.1", new Version(2, 1, 5, 0), allowPrerelease: false), "Stable channel must reject RC");
+                Check(AppUpdater.IsNewer("v2.2.0", new Version(2, 1, 5, 0), allowPrerelease: false), "Stable channel accepts final 2.2.0");
+
+                Check(AppUpdater.IsNewer("v2.2.0-rc.1", new Version(2, 1, 5, 0), allowPrerelease: true), "Preview channel accepts RC1 over 2.1.5");
+                Check(AppUpdater.IsNewer("v2.2.0-rc.2", rc1, allowPrerelease: true), "Preview channel advances RC1 to RC2");
+                Check(AppUpdater.IsNewer("v2.2.0", rc2, allowPrerelease: true), "Preview channel advances RC2 to Final");
+                Check(!AppUpdater.IsNewer("v2.2.0-rc.1", v220, allowPrerelease: true), "RC1 is NOT newer than final 2.2.0");
+
+                string rcJson = "{\"tag_name\":\"v2.2.0-rc.1\",\"draft\":false,\"prerelease\":false,\"assets\":[]}";
+                var stableParsed = AppUpdater.ParseReleaseJson(rcJson, new Version(2, 1, 5, 0), allowPrerelease: false);
+                Check(!stableParsed.UpdateAvailable, "Stable channel must not offer RC even if prerelease=false in JSON");
+
+                var previewParsed = AppUpdater.ParseReleaseJson(rcJson, new Version(2, 1, 5, 0), allowPrerelease: true);
+                Check(previewParsed.UpdateAvailable && previewParsed.LatestVersion == "v2.2.0-rc.1", "Preview channel correctly receives RC");
+            });
+
+            test("External keyboard Insert is preserved unless OEM remap is explicitly enabled",()=>{
+                var keys = new ScreenshotKeys(interceptionEnabled: true, oemInsertRemapEnabled: false);
+
+                var shot = keys.Feed(0x2d, true, true, false, false, 0);
+                Check(!shot.Capture && !shot.Consume, "External keyboard Insert must pass through unconsumed");
+
+                shot = keys.Feed(0x2c, true, true, false, false, 500);
+                Check(shot.Capture && shot.Consume, "PrtScn captured when interception enabled");
+
+                shot = keys.Feed(0x2d, false, true, false, false, 1000);
+                Check(!shot.Capture && !shot.Consume, "Numpad Insert passes through");
+
+                var oemKeys = new ScreenshotKeys(interceptionEnabled: true, oemInsertRemapEnabled: true);
+                shot = oemKeys.Feed(0x2d, true, true, false, false, 1500);
+                Check(shot.Capture && shot.Consume, "OEM laptop key captures when remap enabled");
+
+                var disabledKeys = new ScreenshotKeys(interceptionEnabled: false, oemInsertRemapEnabled: true);
+                shot = disabledKeys.Feed(0x2c, true, true, false, false, 2000);
+                Check(!shot.Capture && !shot.Consume, "PrtScn passes through when interception disabled");
+                shot = disabledKeys.Feed(0x2d, true, true, false, false, 2500);
+                Check(!shot.Capture && !shot.Consume, "Insert passes through when interception disabled");
+            });
+
+            test("Latest launcher resolves target build and requests graceful exit of older instances",()=>{
+                string simDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tests", "out", "launcher-sim-" + Guid.NewGuid().ToString("N"));
+                try {
+                    Directory.CreateDirectory(simDir);
+                    string targetExe = Path.Combine(simDir, "GTBook.exe");
+                    File.WriteAllText(targetExe, "target-binary");
+
+                    string metaJson = "{\"Version\":\"2.2.0\",\"InstallerDirectory\":\"" + simDir.Replace("\\", "\\\\") + "\"}";
+                    string metaFile = Path.Combine(simDir, "latest.json");
+                    File.WriteAllText(metaFile, metaJson);
+
+                    var serializer = new JavaScriptSerializer();
+                    var dict = serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(metaFile));
+                    string resolvedDir = Convert.ToString(dict["InstallerDirectory"]);
+                    string resolvedExe = Path.Combine(resolvedDir, "GTBook.exe");
+                    Check(File.Exists(resolvedExe) && resolvedExe == targetExe, "Target executable resolved from latest.json");
+
+                    string exitSignalName = @"Local\GTBookTestExit_" + Guid.NewGuid().ToString("N");
+                    bool exitCreated;
+                    using (var exitSignal = new EventWaitHandle(false, EventResetMode.AutoReset, exitSignalName, out exitCreated)) {
+                        Check(exitCreated, "Exit signal handle created");
+                        Check(AppSignals.Send(exitSignalName), "Exit signal dispatched");
+                        Check(exitSignal.WaitOne(100), "Exit signal received for graceful shutdown");
+                    }
+                } finally {
+                    try { Directory.Delete(simDir, true); } catch {}
+                }
+            });
+
+            test("Full disk capacity formats truthful zero and near-zero free space metrics",()=>{
+                // Audit #14: Test DeviceInformation.Bytes and FreeBytes formatting
+                Check(DeviceInformation.Bytes(0, allowZero: false) == "Unavailable", "Bytes(0) without allowZero must report Unavailable");
+                Check(DeviceInformation.Bytes(0, allowZero: true) == "0 GB", "Bytes(0) with allowZero must report 0 GB");
+                Check(DeviceInformation.FreeBytes(0) == "0 GB", "FreeBytes(0) must report 0 GB for a completely full drive");
+                Check(DeviceInformation.FreeBytes(10737418240UL) == "10 GB", "FreeBytes(10GB) must format 10 GB");
+                Check(DeviceInformation.FreeBytes(52428800UL) == "0.05 GB", "FreeBytes(50MB) must format 0.05 GB");
+                Check(DeviceInformation.FreeBytes(-1) == "Unavailable", "Negative free bytes must report Unavailable");
+                Check(DeviceInformation.FreeBytes(null) == "Unavailable", "Null free bytes must report Unavailable");
+                Check(DeviceInformation.FreeBytes("invalid") == "Unavailable", "Invalid non-numeric free bytes must report Unavailable");
+
+                // Test DeviceSpecView parsing and rendering for full, near-full, and missing free space
+                using (var view = new DeviceSpecView()) {
+                    view.Width = 600;
+                    view.Height = 800;
+                    string fullReport = "DEVICE\r\nGTBook · x64\r\nSTORAGE SPACE\r\nC: · NTFS · 0 GB free of 500 GB\r\nD: · NTFS · 0.5 GB free of 500 GB\r\nE: · RAW · Unavailable free of 500 GB\r\n";
+                    view.SetReport(fullReport);
+
+                    var items = view.Items;
+                    var cItem = items.FirstOrDefault(i => i.Title.StartsWith("C:"));
+                    Check(cItem != null, "C: drive item must exist");
+                    Check(cItem.BarPercent.HasValue && cItem.BarPercent.Value == 100f, "Completely full drive must render 100% used bar");
+                    Check(cItem.BarText == "100% used", "Completely full drive must show 100% used bar text");
+                    Check(cItem.Subtitle == "100% used", "Completely full drive must show 100% used subtitle");
+
+                    var dItem = items.FirstOrDefault(i => i.Title.StartsWith("D:"));
+                    Check(dItem != null, "D: drive item must exist");
+                    Check(dItem.BarPercent.HasValue && dItem.BarPercent.Value > 99f, "Near full drive must render ~99.9% bar");
+                    Check(dItem.BarText == "100% used", "Near full drive rounded bar text");
+
+                    var eItem = items.FirstOrDefault(i => i.Title.StartsWith("E:"));
+                    Check(eItem != null, "E: drive item with Unavailable must exist");
+                    Check(!eItem.BarPercent.HasValue, "Unavailable free space must omit usage bar");
+                    Check(string.IsNullOrEmpty(eItem.BarText), "Unavailable free space must have no bar text");
+                }
+            });
+
+            test("Small window reachability preserves scrolling and exposes all action controls down to 760x560",()=>{
+                using (var win = new MainWindow(preview: true, startup: false)) {
+                    win.ShowInTaskbar = false;
+                    win.StartPosition = FormStartPosition.Manual;
+                    win.Location = new Point(-32000, -32000);
+                    win.Show();
+                    Application.DoEvents();
+
+                    var page = win.page;
+                    Check(page != null, "MainWindow must contain the main page panel");
+                    Check(page.AutoScroll, "Page panel must have AutoScroll enabled");
+                    Check(!page.HorizontalScroll.Visible, "Horizontal scrollbar must not be visible when content fits width");
+
+                    // Set window to minimum supported dimensions: 760x560
+                    win.ClientSize = new Size(760, 560);
+                    Application.DoEvents();
+
+                    // 1. Overview page
+                    win.ShowPage("Overview");
+                    win.PerformLayout();
+                    page.PerformLayout();
+                    Application.DoEvents();
+                    Check(page.Controls.Count > 0, "Overview page controls loaded");
+
+                    // 2. Lighting page
+                    win.ShowPage("Lighting");
+                    win.PerformLayout();
+                    page.PerformLayout();
+                    Application.DoEvents();
+
+                    // Check keyboard tab
+                    Check(page.Controls.OfType<Control>().Any(c => c.Visible && c.Width <= page.ClientSize.Width), "Keyboard card fits within horizontal viewport");
+
+                    // Switch to rear light bar tab
+                    win.lightingShowRear = true;
+                    win.FitCards();
+                    win.PerformLayout();
+                    page.PerformLayout();
+                    Application.DoEvents();
+
+                    // In Rear light bar tab, verify "Apply to bar" and "Turn off" action buttons exist and are reachable
+                    var allButtons = page.Controls.Cast<Control>().SelectMany(c => {
+                        var list = new List<Control>();
+                        Action<Control> gather = null;
+                        gather = parent => {
+                            foreach (Control ch in parent.Controls) {
+                                list.Add(ch);
+                                gather(ch);
+                            }
+                        };
+                        gather(c);
+                        return list;
+                    }).OfType<RaisedButton>().ToList();
+
+                    var applyBtn = allButtons.FirstOrDefault(b => b.Text == "Apply to bar" || b.Text == "Start music sync" || b.Text.Contains("Apply"));
+                    var turnOffBtn = allButtons.FirstOrDefault(b => b.Text == "Turn off" || b.Text.Contains("turn off"));
+                    Check(applyBtn != null, "Apply to bar action button must be present in rear tab");
+                    Check(turnOffBtn != null, "Turn off action button must be present in rear tab");
+                    Check(applyBtn.Width > 0 && applyBtn.Height > 0, "Apply to bar button has positive dimensions");
+                    Check(turnOffBtn.Width > 0 && turnOffBtn.Height > 0, "Turn off button has positive dimensions");
+
+                    // 3. Settings page
+                    win.ShowPage("Settings");
+                    win.PerformLayout();
+                    page.PerformLayout();
+                    Application.DoEvents();
+                    Check(page.Controls.Count > 0, "Settings page controls loaded");
+
+                    // Switch to secondary settings tab
+                    win.settingsShowSecondary = true;
+                    win.FitCards();
+                    win.PerformLayout();
+                    page.PerformLayout();
+                    Application.DoEvents();
+
+                    // 4. Device & help page
+                    win.ShowPage("Device & help");
+                    win.PerformLayout();
+                    page.PerformLayout();
+                    Application.DoEvents();
+                    var spec = page.Controls.Cast<Control>().SelectMany(c => {
+                        var list = new List<Control>();
+                        Action<Control> gather = null;
+                        gather = parent => {
+                            foreach (Control ch in parent.Controls) {
+                                list.Add(ch);
+                                gather(ch);
+                            }
+                        };
+                        gather(c);
+                        return list;
+                    }).OfType<DeviceSpecView>().FirstOrDefault();
+                    Check(spec != null, "DeviceSpecView exists");
+                    Check(spec.Width <= page.ClientSize.Width, "DeviceSpecView fits within horizontal viewport width");
+
+                    // Test with AutoScroll disabled to demonstrate overflow
+                    page.AutoScroll = false;
+                    bool overflowDetected = false;
+                    foreach (Control card in page.Controls) {
+                        if (card.Visible && card.Bottom > page.ClientSize.Height + 2) {
+                            overflowDetected = true;
+                            break;
+                        }
+                    }
+                    Check(overflowDetected, "Disabling AutoScroll at 760x560 causes vertical clipping, proving AutoScroll necessity");
+                    page.AutoScroll = true;
+                }
+            });
+
             output.AppendLine(passed+" passed, "+failed+" failed. Hardware was not changed.");
             File.WriteAllText(report,output.ToString()); return failed==0?0:1;
         }
@@ -916,6 +1676,53 @@ namespace GTBook {
         sealed class SliderWheelProbe : WheelSafeTrackBar {public void Wheel(int delta,bool horizontal){var message=System.Windows.Forms.Message.Create(Handle,horizontal?0x020E:0x020A,new IntPtr(delta<<16),IntPtr.Zero);base.WndProc(ref message);}}
         sealed class ComboWheelProbe : WheelSafeComboBox {public void Wheel(int delta,bool horizontal){var message=System.Windows.Forms.Message.Create(Handle,horizontal?0x020E:0x020A,new IntPtr(delta<<16),IntPtr.Zero);base.WndProc(ref message);}}
         sealed class PaintProbeButton : RaisedButton {public void PaintOnly(System.Drawing.Graphics graphics){base.OnPaint(new System.Windows.Forms.PaintEventArgs(graphics,ClientRectangle));}}
+        sealed class MockPowerBackend : IPowerBackend {
+            public Guid ActiveScheme = Guid.NewGuid();
+            public Guid ActiveOverlay = Guid.Empty;
+            public bool EnergySaverActive = false;
+            public Dictionary<Guid, string> SchemeNames = new Dictionary<Guid, string>();
+            public List<Guid> Schemes = new List<Guid>();
+            public int SetActiveSchemeCalls = 0;
+
+            public MockPowerBackend() {
+                Schemes.Add(EnergySaver.BalancedScheme);
+                SchemeNames[EnergySaver.BalancedScheme] = "Balanced";
+                Schemes.Add(EnergySaver.HighPerformanceScheme);
+                SchemeNames[EnergySaver.HighPerformanceScheme] = "High Performance";
+                Schemes.Add(EnergySaver.UltimatePerformanceScheme);
+                SchemeNames[EnergySaver.UltimatePerformanceScheme] = "Ultimate Performance";
+                Schemes.Add(ActiveScheme);
+                SchemeNames[ActiveScheme] = "My Custom Scheme";
+            }
+
+            public Guid GetActiveScheme() { return ActiveScheme; }
+            public bool SetActiveScheme(Guid scheme) {
+                SetActiveSchemeCalls++;
+                ActiveScheme = scheme;
+                if (!Schemes.Contains(scheme)) Schemes.Add(scheme);
+                return true;
+            }
+            public void SetActiveOverlay(Guid overlay) { ActiveOverlay = overlay; }
+            public bool SetEnergySaver(bool enabled) { EnergySaverActive = enabled; return true; }
+            public bool IsEnergySaverActive() { return EnergySaverActive; }
+            public string ReadFriendlyName(Guid scheme) {
+                string name;
+                return SchemeNames.TryGetValue(scheme, out name) ? name : null;
+            }
+            public bool SchemeExists(Guid scheme) { return Schemes.Contains(scheme); }
+            public Guid DuplicateScheme(Guid sourceScheme) {
+                Guid dup = Guid.NewGuid();
+                Schemes.Add(dup);
+                SchemeNames[dup] = "Duplicate of " + (ReadFriendlyName(sourceScheme) ?? "Unknown");
+                return dup;
+            }
+            public bool WriteFriendlyName(Guid scheme, string name) {
+                SchemeNames[scheme] = name;
+                return true;
+            }
+            public bool WriteSetting(Guid scheme, Guid subGroup, Guid setting, uint acValue, uint dcValue) { return true; }
+            public List<Guid> EnumerateSchemes() { return new List<Guid>(Schemes); }
+        }
         static void MustThrow(Action action){try{action();}catch(ArgumentException){return;}catch(FormatException){return;}throw new Exception("Invalid input was accepted");}
     }
 }

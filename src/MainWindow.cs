@@ -76,7 +76,7 @@ namespace GTBook
 
 		private readonly System.Windows.Forms.Timer clock = new System.Windows.Forms.Timer();
 
-		private FlowLayoutPanel page;
+		internal FlowLayoutPanel page;
 
 		private volatile bool busy;
         private volatile bool suspended;
@@ -145,7 +145,7 @@ namespace GTBook
 		private BufferedPanel lightingTabs, settingsTabs;
 		private RaisedButton keyboardTabBtn, rearTabBtn, settingsTabPrimaryBtn, settingsTabSecondaryBtn;
 		private SoftPanel keyboardCardRef, rearCardRef, settingsPrefCard, settingsPowerCard, settingsKeysCard;
-		private bool lightingShowRear, settingsShowSecondary;
+		internal bool lightingShowRear, settingsShowSecondary;
 
 		private string keyboardResult = "Not applied in this session";
 
@@ -203,6 +203,7 @@ namespace GTBook
 		private EventWaitHandle keyboardStop;
         private KeyboardChannel keyboardChannel;
         private bool keyboardAwakeConfigured;
+        private bool foregroundRequested;
         private bool fittingCards;
         private Label usbState;
         private RaisedButton usbOn,usbOff;
@@ -433,9 +434,12 @@ namespace GTBook
 				Dock = DockStyle.Fill,
 				FlowDirection = FlowDirection.TopDown,
 				WrapContents = false,
-				AutoScroll = false,
+				AutoScroll = true,
 				Padding = SPadding(0, 0, 0, 6)
 			};
+            page.HorizontalScroll.Maximum = 0;
+            page.HorizontalScroll.Visible = false;
+            page.HorizontalScroll.Enabled = false;
 			page.SizeChanged += delegate
 			{
 				FitCards();
@@ -493,10 +497,20 @@ namespace GTBook
 			{
 				if (startup)
 				{
-					mainWindow.Hide();
-					mainWindow.Opacity = 1.0;
-					mainWindow.ShowInTaskbar = true;
-					Store.Log("Started with Windows · tray mode");
+					if (!foregroundRequested)
+					{
+						mainWindow.Hide();
+						mainWindow.Opacity = 1.0;
+						mainWindow.ShowInTaskbar = true;
+						Store.Log("Started with Windows · tray mode");
+					}
+					else
+					{
+						mainWindow.Opacity = 1.0;
+						mainWindow.ShowInTaskbar = true;
+						mainWindow.WindowState = FormWindowState.Normal;
+						mainWindow.Activate();
+					}
 				}
 				if (preview)
 				{
@@ -610,7 +624,9 @@ namespace GTBook
             finally{takingControl=false;}
         }
         public async void ShowWithDeviceControl(){
-            if(IsDisposed)return;Show();WindowState=FormWindowState.Normal;Activate();if(takingControl)return;
+            if(IsDisposed)return;
+            foregroundRequested=true;
+            Show();WindowState=FormWindowState.Normal;Activate();if(takingControl)return;
             await CloseOfficialOnOpen();if(!IsDisposed&&!busy)await Run(new Request{Action="refresh"},null,true);
         }
         public void ExitApplication(){exitRequested=true;Close();}
@@ -633,7 +649,8 @@ namespace GTBook
                     if(hardwareReady){
                         RuntimeMetrics.Record("hardware_ready");
                         if(keyboardTask==null&&ExtraEffects.Contains(keyboard.Effect)&&keyboard.Brightness>0&&Store.Flag("resume-extra",keyboard.Action=="keyboard-animation"))await StartKeyboardAnimation(Copy(keyboard,"keyboard-animation"),true,true);
-                        if(rear!=null&&rear.Brightness>0&&rear.Action!="rear-off"){
+                        bool rearPowerEnabled = Store.Flag("rear-power-enabled", true);
+                        if(rear!=null&&rear.Brightness>0&&rear.Action!="rear-off"&&rearPowerEnabled){
                             try{
                                 if(RearLighting.IsMusic(rear.Effect))await StartMusic(Copy(rear,"rear-music"));
                                 else await Run(Copy(rear,"rear"),null,true);
@@ -696,7 +713,7 @@ namespace GTBook
 			return raisedButton2;
 		}
 
-		private void FitCards()
+		internal void FitCards()
 		{
             if(fittingCards)return;fittingCards=true;page.SuspendLayout();
             try{
@@ -803,10 +820,10 @@ namespace GTBook
 			base.Location = new Point(-32000, -32000);
 			Show();
 			Application.DoEvents();
-			int[] array = new int[] { 1920,1080,860 };
+			int[] array = new int[] { 1920, 1080, 860, 760 };
 			foreach (int num in array)
 			{
-				base.ClientSize = new Size(num, num==1920?1080:800);
+				base.ClientSize = new Size(num, num==1920?1080:(num==760?560:800));
 				string[] array2 = new string[4] { "Overview", "Lighting", "Settings", "Device & help" };
 				foreach (string text in array2)
 				{
@@ -1012,7 +1029,7 @@ namespace GTBook
             MinimumSize=Size.Empty;
             ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Location=new Point(-32000,-32000);Show();
             if((CreateParams.ExStyle&0x02000000)==0)throw new Exception("MainWindow missing WS_EX_COMPOSITED double-buffered resize protection.");
-            if(page.AutoScroll)throw new Exception("MainWindow page should not enable AutoScroll.");
+            if(!page.AutoScroll)throw new Exception("MainWindow page must enable AutoScroll to allow scrolling when content exceeds the viewport.");
             foreach(int width in new[]{1920,860,1280,760,860,1080}){
                 ClientSize=new Size(width,width==1920?1080:(width==760?560:800));
                 foreach(string pageTitle in new[]{"Overview","Lighting","Settings","Device & help"}){
@@ -1021,13 +1038,13 @@ namespace GTBook
                     if(heading.Bottom>subtitle.Top||subtitle.Bottom>heading.Parent.ClientSize.Height)throw new Exception("Header label clipped in "+pageTitle+" @ "+width+": heading="+heading.Bounds+" sub="+subtitle.Bounds+" panel="+heading.Parent.ClientSize);
                     foreach(Control card in page.Controls){
                         if(!card.Visible)continue;
-                        if(width>=860&&card.Bottom>page.ClientSize.Height+2)throw new Exception("Vertical overflow without scroll in "+pageTitle+" @ "+width+": bottom="+card.Bottom+" viewport="+page.ClientSize.Height+" card="+card.Text);
+                        if(!page.AutoScroll&&card.Bottom>page.ClientSize.Height+2)throw new Exception("Vertical overflow without scroll in "+pageTitle+" @ "+width+": bottom="+card.Bottom+" viewport="+page.ClientSize.Height+" card="+card.Text);
                         CheckRecursiveFit(card,pageTitle,width);
                     }
-                    if(pageTitle=="Device & help"&&specView!=null&&!specView.IsDisposed&&width>=860){
+                    if(pageTitle=="Device & help"&&specView!=null&&!specView.IsDisposed){
                         specView.SelectCategory(1);PerformLayout();page.PerformLayout();Application.DoEvents();
                         foreach(Control card in page.Controls){
-                            if(card.Visible&&card.Bottom>page.ClientSize.Height+2)throw new Exception("Vertical overflow in Device & help All @ "+width+": bottom="+card.Bottom+" viewport="+page.ClientSize.Height);
+                            if(!page.AutoScroll&&card.Visible&&card.Bottom>page.ClientSize.Height+2)throw new Exception("Vertical overflow without scroll in Device & help All @ "+width+": bottom="+card.Bottom+" viewport="+page.ClientSize.Height);
                         }
                         specView.SelectCategory(0);
                     }
@@ -1145,7 +1162,7 @@ namespace GTBook
 			card.Controls.Add(label);
 		}
 
-		private void ShowPage(string title)
+		internal void ShowPage(string title)
 		{
 			page.SuspendLayout();
 			SetPreviewAnimation(page, false);
@@ -1360,7 +1377,9 @@ namespace GTBook
 				}
 				laptopKeys = new LaptopShortcuts
 				{
-					MediaKeys = fnKeys
+					MediaKeys = fnKeys,
+					ScreenshotInterception = Store.Flag("screenshot-intercept", true),
+					OemInsertRemap = Store.Flag("oem-insert-remap", false)
 				};
 				laptopKeys.Action += delegate(string action)
 				{
@@ -2510,18 +2529,43 @@ namespace GTBook
                 }
             };
             keysCard.Controls.Add(enable);
-            Label keysGuide = Label("F1 / F2: Screen brightness −10% / +10%\nF3 tap: Keyboard brightness · F3 hold 0.8s: Next effect\nHold Shift / Ctrl / Alt for normal F1–F3 · media uses Windows.", 9f);
+
+            bool interceptShots = Store.Flag("screenshot-intercept", true);
+            CheckBox screenshotBox = new CheckBox { Text = "Capture screenshots with PrtScn", Checked = interceptShots, Font = new Font("Segoe UI", 9.5f), ForeColor = ink };
+            screenshotBox.CheckedChanged += delegate {
+                bool val = screenshotBox.Checked;
+                Store.SaveFlag("screenshot-intercept", val);
+                if (laptopKeys != null) laptopKeys.ScreenshotInterception = val;
+                status.Text = "Screenshot preference saved.";
+            };
+            keysCard.Controls.Add(screenshotBox);
+
+            bool remapInsert = Store.Flag("oem-insert-remap", false);
+            CheckBox oemInsertBox = new CheckBox { Text = "Remap laptop Insert key to PrtScn", Checked = remapInsert, Font = new Font("Segoe UI", 9.5f), ForeColor = ink };
+            oemInsertBox.CheckedChanged += delegate {
+                bool val = oemInsertBox.Checked;
+                Store.SaveFlag("oem-insert-remap", val);
+                if (laptopKeys != null) laptopKeys.OemInsertRemap = val;
+                status.Text = "OEM Insert remap preference saved.";
+            };
+            keysCard.Controls.Add(oemInsertBox);
+
+            Label keysGuide = Label("F1 / F2: Screen brightness −10% / +10% · F3: Keyboard brightness & effect\nHold Shift / Ctrl / Alt for normal F1–F3 · media uses Windows.", 9f);
             keysCard.Controls.Add(keysGuide);
             RegisterCardReflow(keysCard, () => {
                 ReflowCardHeader(keysCard, keysDesc);
                 int padX = S(20), innerW = Math.Max(S(160), keysCard.Width - 2 * padX);
                 keysDesc.Left = padX; keysDesc.Width = innerW;
-                ConfigureWrappingCheckBox(enable, keysCard.Width, 20);
-                enable.Location = new Point(padX, keysDesc.Bottom + S(8));
-                keysGuide.Location = new Point(padX, enable.Bottom + S(6));
+                int y = keysDesc.Bottom + S(6);
+                foreach (var cb in new[] { enable, screenshotBox, oemInsertBox }) {
+                    ConfigureWrappingCheckBox(cb, keysCard.Width, 20);
+                    cb.Location = new Point(padX, y);
+                    y = cb.Bottom + S(4);
+                }
+                keysGuide.Location = new Point(padX, y);
                 keysGuide.Width = innerW;
-                keysGuide.Height = MeasureLabelHeight(keysGuide, innerW, S(54));
-                keysCard.Height = keysGuide.Bottom + S(12);
+                keysGuide.Height = MeasureLabelHeight(keysGuide, innerW, S(36));
+                keysCard.Height = keysGuide.Bottom + S(10);
             });
 
             SoftPanel updateCard = Card("App updates", "Check GitHub releases and install directly.", 200);
@@ -3519,17 +3563,47 @@ namespace GTBook
 			}
 
 			string gpuRawText = snapshot.ContainsKey("gpu") ? snapshot["gpu"] : "";
-			bool gpuMissing = string.IsNullOrEmpty(gpuRawText) || gpuRawText.StartsWith("Unavailable");
+			string gpuStatus = snapshot.ContainsKey("gpu-status") ? snapshot["gpu-status"] : "";
+			if (string.IsNullOrEmpty(gpuStatus) && !string.IsNullOrEmpty(gpuRawText))
+			{
+				if (gpuRawText.StartsWith("Unavailable"))
+				{
+					if (gpuRawText.IndexOf("busy", StringComparison.OrdinalIgnoreCase) >= 0) gpuStatus = "Busy";
+					else if (gpuRawText.IndexOf("access", StringComparison.OrdinalIgnoreCase) >= 0 || gpuRawText.IndexOf("denied", StringComparison.OrdinalIgnoreCase) >= 0) gpuStatus = "AccessDenied";
+					else if (gpuRawText.IndexOf("sleep", StringComparison.OrdinalIgnoreCase) >= 0) gpuStatus = "Asleep";
+					else gpuStatus = "Error";
+				}
+				else gpuStatus = "Ok";
+			}
+
 			bool iGpuOnly = snapshot.ContainsKey("gpu-mode") && snapshot["gpu-mode"] == "iGPU only";
 			if (!gpuTile.IsDisposed)
 			{
-				if (!gpuMissing)
+				if (gpuStatus == "Ok")
 				{
 					gpuTile.ValueText = gpuRawText;
 					gpuTile.DetailText = "Discrete GPU active";
 					gpuTile.DotColor = Theme.OrangeEnd;
 				}
-				else if (snapshot.ContainsKey("gpu"))
+				else if (gpuStatus == "Busy")
+				{
+					gpuTile.ValueText = "Busy";
+					gpuTile.DetailText = "Sensor reading deferred";
+					gpuTile.DotColor = muted;
+				}
+				else if (gpuStatus == "AccessDenied")
+				{
+					gpuTile.ValueText = "Access denied";
+					gpuTile.DetailText = "Sensor access restricted";
+					gpuTile.DotColor = muted;
+				}
+				else if (gpuStatus == "Error")
+				{
+					gpuTile.ValueText = "Unavailable";
+					gpuTile.DetailText = "Could not read sensor";
+					gpuTile.DotColor = muted;
+				}
+				else if (gpuStatus == "Asleep")
 				{
 					gpuTile.ValueText = iGpuOnly ? "Idle" : "Asleep";
 					gpuTile.DetailText = iGpuOnly ? "iGPU only · dGPU off" : "Discrete GPU inactive";
@@ -3638,9 +3712,17 @@ namespace GTBook
                 if(changed&&modeSounds&&!preview){if(modeChime==null)modeChime=new ModeChime();modeChime.Play(notice.Mode);}
                 if(!preview)EnergySaver.SyncAsync(notice.Mode,autoEnergySaver);
                 if(!changed)notice.Detail="Already active. You're all set.";
-                else if(notice.Mode==3)notice.Detail="Ultimate Performance · Full fans ON";
+                else if(notice.Mode==3){
+                    string cooling=reply.Data.ContainsKey("cooling")?reply.Data["cooling"]:"";
+                    notice.Detail=cooling=="Full fan override"?"Ultimate Performance · Full fans ON":"Performance active · Full fans unconfirmed";
+                }
                 else if(autoEnergySaver&&notice.Mode==0)notice.Detail="Energy saver active · Quiet & cool";
                 else if(autoEnergySaver&&(notice.Mode==1||notice.Mode==2))notice.Detail="Energy saver turned off";
+            }else if(notice.Kind==FeedbackKind.Error&&request.Action=="mode"&&reply.Data.ContainsKey("partial")){
+                confirmedMode=2;
+                if(modeObserver!=null)modeObserver.Confirm(2);
+                UpdateModeTile(PerformanceModes.Names[2]);
+                if(!preview)EnergySaver.SyncAsync(2,autoEnergySaver);
             }
             if((request.Action=="keyboard"||request.Action=="keyboard-animation")&&applyKeyboardButton!=null&&!applyKeyboardButton.IsDisposed)applyKeyboardButton.Flash(notice.Kind!=FeedbackKind.Error);
             shortcutToast.Notify(notice);
@@ -3667,7 +3749,11 @@ namespace GTBook
         {
             if(preview||IsDisposed||!snapshot.ContainsKey("mode"))return;
             int mode=PerformanceModes.Index(snapshot["mode"]);if(mode<0)return;
-            if(confirmedMode<0){confirmedMode=mode;if(!preview)EnergySaver.SyncAsync(mode,autoEnergySaver);}
+            if(confirmedMode<0){
+                confirmedMode=mode;
+                if(!preview)EnergySaver.ReconcileStartup(mode);
+                if(!preview)EnergySaver.SyncAsync(mode,autoEnergySaver);
+            }
             else if(confirmedMode!=mode && !(confirmedMode==3 && mode==2)){var reply=new Reply{Ok=true};reply.Data["mode"]=PerformanceModes.Names[mode];NotifyApplied(new Request{Action="mode",Mode=mode},reply);}
             if(modeObserver!=null){modeObserver.Confirm(mode>2?2:mode);return;}
             if(!snapshot.ContainsKey("supported")||snapshot["supported"]!="True"||snapshot.ContainsKey("conflict")&&snapshot["conflict"].Length>0)return;
@@ -3849,6 +3935,14 @@ namespace GTBook
 					if (reply.Ok)
 					{
 						rearState.Applied(r);
+						if (r.Action == "rear-off")
+						{
+							try { Store.SaveFlag("rear-power-enabled", false); } catch {}
+						}
+						else if (r.Action == "rear" || r.Action == "rear-music")
+						{
+							try { Store.SaveFlag("rear-power-enabled", r.Brightness > 0); } catch {}
+						}
 					}
 					else
 					{

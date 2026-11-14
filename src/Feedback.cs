@@ -35,11 +35,22 @@ namespace GTBook {
             var notice=Applied(request,new Reply{Ok=true});notice.IsPending=true;notice.Detail="";return notice;
         }
         public static FeedbackNotice Applied(Request r,Reply reply){
-            if(!reply.Ok)return new FeedbackNotice{Kind=FeedbackKind.Error,Title="Couldn't apply that",Detail=reply.Message};
+            if(!reply.Ok){
+                if(r.Action=="mode"){
+                    if(reply.Data.ContainsKey("cooling-restore-failed"))return new FeedbackNotice{Kind=FeedbackKind.Error,Mode=r.Mode,Title="Cooling restore failed",Detail=reply.Message};
+                    if(reply.Data.ContainsKey("partial"))return new FeedbackNotice{Kind=FeedbackKind.Error,Mode=2,Title="Turbo partially applied",Detail=reply.Message};
+                }
+                return new FeedbackNotice{Kind=FeedbackKind.Error,Title="Couldn't apply that",Detail=reply.Message};
+            }
             if(r.Action=="mode"){
                 string[] names={"Quiet","Balanced","Performance","Turbo"};
                 if(r.Mode<0||r.Mode>3||!reply.Data.ContainsKey("mode")||reply.Data["mode"]!=names[r.Mode])return new FeedbackNotice{Kind=FeedbackKind.Error,Title="Mode not confirmed",Detail="Wait a moment for live sync, then try again."};
-                return new FeedbackNotice{Kind=FeedbackKind.Mode,Mode=r.Mode,Title=names[r.Mode]+" mode",Detail=r.Mode==3?"Ultimate Performance · Full fans ON":""};
+                string cooling=reply.Data.ContainsKey("cooling")?reply.Data["cooling"]:"";
+                string detail="";
+                if(r.Mode==3){
+                    detail=cooling=="Full fan override"?"Ultimate Performance · Full fans ON":"Performance active · Full fans unconfirmed";
+                }
+                return new FeedbackNotice{Kind=FeedbackKind.Mode,Mode=r.Mode,Title=names[r.Mode]+" mode",Detail=detail};
             }
             if(r.Action=="screen-brightness"){
                 int percent;if(!reply.Data.ContainsKey("display-brightness")||!int.TryParse(reply.Data["display-brightness"],out percent)||percent<0||percent>100)return new FeedbackNotice{Kind=FeedbackKind.Error,Title="Brightness not confirmed",Detail=reply.Message};

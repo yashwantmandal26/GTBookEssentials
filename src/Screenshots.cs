@@ -8,12 +8,19 @@ using System.Windows.Forms;
 namespace GTBook {
     public sealed class ScreenshotKeys {
         public struct Decision {public bool Capture,Consume;}
+        public bool InterceptionEnabled { get; set; }
+        public bool OemInsertRemapEnabled { get; set; }
+        public ScreenshotKeys(bool interceptionEnabled = true, bool oemInsertRemapEnabled = false) {
+            InterceptionEnabled = interceptionEnabled;
+            OemInsertRemapEnabled = oemInsertRemapEnabled;
+        }
         readonly HashSet<int> held=new HashSet<int>(),modified=new HashSet<int>();long last=-1000;
         public Decision Feed(int key,bool extended,bool down,bool modifiers,bool injected,long milliseconds){
             var result=new Decision();
-            // The GTBook's physical Insert/PrtScn key sends extended Insert without Fn.
-            // Numpad Insert is not extended and stays available to applications.
-            if(injected || !(key==0x2c || key==0x2d&&extended))return result;
+            if(!InterceptionEnabled||injected)return result;
+            bool isPrtScn=(key==0x2c);
+            bool isOemInsert=(key==0x2d&&extended&&OemInsertRemapEnabled);
+            if(!isPrtScn&&!isOemInsert)return result;
             if(down){
                 if(modifiers){modified.Add(key);return result;}
                 result.Consume=true;bool first=held.Add(key);if(first&&milliseconds-last>=250){last=milliseconds;result.Capture=true;}return result;

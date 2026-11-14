@@ -180,7 +180,7 @@ namespace GTBook {
                         if(Interlocked.Exchange(ref checkingConflict,1)!=0)return;
                         try{
                             string c=Hardware.Conflict();
-                            if(c.Contains("ControlCenter")||c.Contains("InfinixToolkit")||c.Contains("old Python toolkit"))Volatile.Write(ref conflictFailure,c);
+                            if(!string.IsNullOrEmpty(c))Volatile.Write(ref conflictFailure,c);
                         }catch{}finally{Volatile.Write(ref checkingConflict,0);}
                     },null,2000,5000)){
                     int frames=LiveStream(r,()=>stop.WaitOne(0),()=>{

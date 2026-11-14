@@ -69,11 +69,36 @@ try {
     try{$original=$folder.GetTask('ControlCenter');$oldOriginalEnabled=$original.Enabled}catch{}
     $state=[ordered]@{InstallDirectory=$appRoot;UserSid=$OriginalSid;OriginalPath=$null;OriginalEnabled=$oldOriginalEnabled;InstalledAt=(Get-Date).ToString('o')}
     if($original){$state.OriginalPath=$original.Definition.Actions.Item(1).Path}
-    if(Test-Path -LiteralPath $stateFile){$prior=Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json;$state.OriginalEnabled=$prior.OriginalEnabled;$state.OriginalPath=$prior.OriginalPath}
+    $stateExisted=Test-Path -LiteralPath $stateFile
+    if($stateExisted){
+        $prior=Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
+        $state.OriginalEnabled=$prior.OriginalEnabled
+        $state.OriginalPath=$prior.OriginalPath
+        Copy-Item -LiteralPath $stateFile -Destination (Join-Path $backup 'install-state.json') -Force
+    }
     if($oldXml){[IO.File]::WriteAllText((Join-Path $backup 'previous-task.xml'),$oldXml)}
     $files=@('GTBook.exe','Start.ps1','Start.bat','Uninstall.ps1','assets\gtbook-essentials.ico')
     $existed=@{}
     foreach($relative in $files){$target=Join-Path $appRoot $relative;$existed[$relative]=Test-Path -LiteralPath $target;if($existed[$relative]){$copy=Join-Path $backup $relative;New-Item -ItemType Directory -Path (Split-Path $copy -Parent) -Force | Out-Null;Copy-Item -LiteralPath $target -Destination $copy}}
+    $menu=Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'GTBOOK Essentials'
+    $menuExisted=Test-Path -LiteralPath $menu
+    $shortcutMain=Join-Path $menu 'GTBOOK Essentials.lnk'
+    $shortcutMainExisted=Test-Path -LiteralPath $shortcutMain
+    if($shortcutMainExisted){Copy-Item -LiteralPath $shortcutMain -Destination (Join-Path $backup 'GTBOOK Essentials.lnk') -Force}
+    $shortcutUninst=Join-Path $menu 'Uninstall GTBOOK Essentials.lnk'
+    $shortcutUninstExisted=Test-Path -LiteralPath $shortcutUninst
+    if($shortcutUninstExisted){Copy-Item -LiteralPath $shortcutUninst -Destination (Join-Path $backup 'Uninstall GTBOOK Essentials.lnk') -Force}
+    $key='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\GTBOOK Essentials'
+    $regKeyExisted=Test-Path -Path $key
+    $regBackup=@{}
+    if($regKeyExisted){
+        try{
+            $regItem=Get-ItemProperty -Path $key
+            foreach($p in @('DisplayName','DisplayVersion','DisplayIcon','UninstallString','NoModify')){
+                if($regItem.PSObject.Properties[$p]){$regBackup[$p]=$regItem.$p}
+            }
+        }catch{}
+    }
     try {
         foreach($relative in $files){$target=Join-Path $appRoot $relative;New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null;Write-Atomic $target ([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot $relative)))}
         $exe=Join-Path $appRoot 'GTBook.exe'
@@ -86,11 +111,11 @@ try {
         Release-Com $registered
         $state.Version=(Get-Item -LiteralPath $exe).VersionInfo.FileVersion
         Write-Atomic $stateFile ([Text.Encoding]::UTF8.GetBytes(($state | ConvertTo-Json)))
-        $menu=Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'GTBOOK Essentials';New-Item -ItemType Directory -Path $menu -Force | Out-Null
+        New-Item -ItemType Directory -Path $menu -Force | Out-Null
         $shell=New-Object -ComObject WScript.Shell
-        $shortcut=$shell.CreateShortcut((Join-Path $menu 'GTBOOK Essentials.lnk'));$shortcut.TargetPath=Join-Path $appRoot 'Start.bat';$shortcut.WorkingDirectory=$appRoot;$shortcut.IconLocation=Join-Path $appRoot 'assets\gtbook-essentials.ico';$shortcut.WindowStyle=7;$shortcut.Save();Release-Com $shortcut
-        $shortcut=$shell.CreateShortcut((Join-Path $menu 'Uninstall GTBOOK Essentials.lnk'));$shortcut.TargetPath=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe';$shortcut.Arguments='-NoProfile -ExecutionPolicy Bypass -File "'+(Join-Path $appRoot 'Uninstall.ps1')+'"';$shortcut.WindowStyle=7;$shortcut.Save();Release-Com $shortcut;Release-Com $shell
-        $key='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\GTBOOK Essentials';New-Item -Path $key -Force | Out-Null
+        $shortcut=$shell.CreateShortcut($shortcutMain);$shortcut.TargetPath=Join-Path $appRoot 'Start.bat';$shortcut.WorkingDirectory=$appRoot;$shortcut.IconLocation=Join-Path $appRoot 'assets\gtbook-essentials.ico';$shortcut.WindowStyle=7;$shortcut.Save();Release-Com $shortcut
+        $shortcut=$shell.CreateShortcut($shortcutUninst);$shortcut.TargetPath=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe';$shortcut.Arguments='-NoProfile -ExecutionPolicy Bypass -File "'+(Join-Path $appRoot 'Uninstall.ps1')+'"';$shortcut.WindowStyle=7;$shortcut.Save();Release-Com $shortcut;Release-Com $shell
+        New-Item -Path $key -Force | Out-Null
         New-ItemProperty -Path $key -Name DisplayName -Value 'GTBOOK Essentials' -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $key -Name DisplayVersion -Value $state.Version -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $key -Name DisplayIcon -Value $exe -PropertyType String -Force | Out-Null
@@ -98,9 +123,40 @@ try {
         New-ItemProperty -Path $key -Name NoModify -Value 1 -PropertyType DWord -Force | Out-Null
         $run=$folder.GetTask($taskName);$started=$run.Run($null);Release-Com $started;Release-Com $run
     }catch {
-        foreach($relative in $files){$target=Join-Path $appRoot $relative;if($existed[$relative]){Write-Atomic $target ([IO.File]::ReadAllBytes((Join-Path $backup $relative)))}else{if(Test-Path -LiteralPath $target){Remove-Item -LiteralPath $target -Force}}}
-        if($oldXml){$restored=$folder.RegisterTask($taskName,$oldXml,6,$OriginalSid,$null,3,$null);Release-Com $restored}else{try{$folder.DeleteTask($taskName,0)}catch{}}
-        if($original){$original.Enabled=$oldOriginalEnabled}
+        foreach($relative in $files){
+            try{
+                $target=Join-Path $appRoot $relative
+                if($existed[$relative]){Write-Atomic $target ([IO.File]::ReadAllBytes((Join-Path $backup $relative)))}
+                else{if(Test-Path -LiteralPath $target){Remove-Item -LiteralPath $target -Force}}
+            }catch{}
+        }
+        try{
+            if($stateExisted){Write-Atomic $stateFile ([IO.File]::ReadAllBytes((Join-Path $backup 'install-state.json')))}
+            else{if(Test-Path -LiteralPath $stateFile){Remove-Item -LiteralPath $stateFile -Force}}
+        }catch{}
+        try{
+            if($shortcutMainExisted){Copy-Item -LiteralPath (Join-Path $backup 'GTBOOK Essentials.lnk') -Destination $shortcutMain -Force}
+            else{if(Test-Path -LiteralPath $shortcutMain){Remove-Item -LiteralPath $shortcutMain -Force}}
+            if($shortcutUninstExisted){Copy-Item -LiteralPath (Join-Path $backup 'Uninstall GTBOOK Essentials.lnk') -Destination $shortcutUninst -Force}
+            else{if(Test-Path -LiteralPath $shortcutUninst){Remove-Item -LiteralPath $shortcutUninst -Force}}
+            if(-not $menuExisted -and (Test-Path -LiteralPath $menu)){
+                if(@(Get-ChildItem -LiteralPath $menu).Count -eq 0){Remove-Item -LiteralPath $menu -Force}
+            }
+        }catch{}
+        try{
+            if($regKeyExisted){
+                foreach($p in $regBackup.Keys){New-ItemProperty -Path $key -Name $p -Value $regBackup[$p] -Force | Out-Null}
+            }else{
+                if(Test-Path -Path $key){Remove-Item -Path $key -Recurse -Force}
+            }
+        }catch{}
+        try{
+            if($oldXml){$restored=$folder.RegisterTask($taskName,$oldXml,6,$OriginalSid,$null,3,$null);Release-Com $restored}
+            else{try{$folder.DeleteTask($taskName,0)}catch{}}
+        }catch{}
+        try{
+            if($original){$original.Enabled=$oldOriginalEnabled}
+        }catch{}
         throw
     }finally{Release-Com $oldTask;Release-Com $original;Release-Com $folder;Release-Com $service}
     Show-Result ('Installed GTBOOK Essentials '+$state.Version+'. It starts in the tray automatically at Windows sign-in.'+$(if($supported -and -not $deviceSupport.Ready){"`nDevice controls are unavailable. See GitHub docs/DRIVER_SUPPORT.md for recovery steps."}elseif(-not $supported){"`nThis model/BIOS is not yet reviewed; hardware writes stay disabled."}else{''}))

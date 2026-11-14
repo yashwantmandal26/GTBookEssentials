@@ -27,7 +27,8 @@ namespace GTBook {
             if(EnumDisplaySettings(screen.DeviceName,-1,ref mode))return prefix+mode.Width+" × "+mode.Height+" · "+mode.Frequency+" Hz · "+mode.BitsPerPel+"-bit colour";
             return prefix+"Current display mode unavailable";
         }
-        public static string Bytes(object value){double size;if(value==null||!double.TryParse(Convert.ToString(value,CultureInfo.InvariantCulture),NumberStyles.Any,CultureInfo.InvariantCulture,out size)||size<=0)return "Unavailable";return (size/1073741824d).ToString("0.##",CultureInfo.InvariantCulture)+" GB";}
+        public static string Bytes(object value, bool allowZero = false){double size;if(value==null||!double.TryParse(Convert.ToString(value,CultureInfo.InvariantCulture),NumberStyles.Any,CultureInfo.InvariantCulture,out size)||size<0||(size==0&&!allowZero))return "Unavailable";return (size/1073741824d).ToString("0.##",CultureInfo.InvariantCulture)+" GB";}
+        public static string FreeBytes(object value){return Bytes(value,allowZero:true);}
         static string Value(Dictionary<string,object> row,string key){object v;return row.TryGetValue(key,out v)&&v!=null&&!string.IsNullOrWhiteSpace(Convert.ToString(v))?Convert.ToString(v).Trim():"Unavailable";}
         static string Date(string value){try{return ManagementDateTimeConverter.ToDateTime(value).ToString("dd MMM yyyy");}catch{return "Unavailable";}}
         static List<Dictionary<string,object>> Rows(string query,string scope="root\\cimv2"){
@@ -54,7 +55,7 @@ namespace GTBook {
             Section(text,"Graphics",()=>string.Join("\r\n\r\n",Rows("SELECT Name,DriverVersion,DriverDate,CurrentHorizontalResolution,CurrentVerticalResolution,CurrentRefreshRate FROM Win32_VideoController").Select(r=>Value(r,"Name")+"\r\nDriver "+Value(r,"DriverVersion")+" · "+Date(Value(r,"DriverDate"))+"\r\nOutput: "+Value(r,"CurrentHorizontalResolution")+" × "+Value(r,"CurrentVerticalResolution")+" · "+Value(r,"CurrentRefreshRate")+" Hz")));
             Section(text,"Displays",()=>string.Join("\r\n",Screen.AllScreens.Select(Display)));
             Section(text,"Storage devices",()=>string.Join("\r\n",Rows("SELECT Model,Size,InterfaceType FROM Win32_DiskDrive").Select(r=>Value(r,"Model")+" · "+Bytes(r["Size"])+" · "+Value(r,"InterfaceType"))));
-            Section(text,"Storage space",()=>string.Join("\r\n",Rows("SELECT DeviceID,FileSystem,Size,FreeSpace FROM Win32_LogicalDisk WHERE DriveType=3").Select(r=>Value(r,"DeviceID")+" · "+Value(r,"FileSystem")+" · "+Bytes(r["FreeSpace"])+" free of "+Bytes(r["Size"]))));
+            Section(text,"Storage space",()=>string.Join("\r\n",Rows("SELECT DeviceID,FileSystem,Size,FreeSpace FROM Win32_LogicalDisk WHERE DriveType=3").Select(r=>Value(r,"DeviceID")+" · "+Value(r,"FileSystem")+" · "+FreeBytes(r["FreeSpace"])+" free of "+Bytes(r["Size"]))));
             Section(text,"Battery",()=>string.Join("\r\n",Rows("SELECT Name,EstimatedChargeRemaining FROM Win32_Battery").Select(r=>Value(r,"Name")+" · "+Value(r,"EstimatedChargeRemaining")+"%"))+"\r\nPower source: "+SystemInformation.PowerStatus.PowerLineStatus);
             Section(text,"Battery capacity",()=>{
                 var design=Rows("SELECT DesignedCapacity FROM BatteryStaticData","root\\wmi");var full=Rows("SELECT FullChargedCapacity FROM BatteryFullChargedCapacity","root\\wmi");

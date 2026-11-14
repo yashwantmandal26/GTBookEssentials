@@ -85,6 +85,8 @@ namespace GTBook {
         void Emit(string action){if(action==null)return;bool repeat=action.EndsWith("-repeat");if(repeat)action=action.Substring(0,action.Length-7);bool brightness=action.StartsWith("brightness-");if(!brightness||!repeat||clock.ElapsedMilliseconds-repeatedAt>=100){if(brightness)repeatedAt=clock.ElapsedMilliseconds;try{if(Action!=null)Action(action);}catch{}}}
         bool mediaKeys=true;
         public bool MediaKeys {get{return mediaKeys;}set{mediaKeys=value;if(!value)ResetGestures();}}
+        public bool ScreenshotInterception {get{return screenshots.InterceptionEnabled;}set{screenshots.InterceptionEnabled=value;}}
+        public bool OemInsertRemap {get{return screenshots.OemInsertRemapEnabled;}set{screenshots.OemInsertRemapEnabled=value;}}
         public event Action<string> Action;
         public void ResetGestures(){holdTimer.Stop();decoder.Reset();consumed.Clear();}
         internal void PollHold(long milliseconds){

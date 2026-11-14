@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web.Script.Serialization;
 using Microsoft.Win32;
 
 namespace GTBook {
@@ -16,7 +17,27 @@ namespace GTBook {
         public uint DcValue;
     }
 
-    public static class EnergySaver {
+    public struct TurboOwnership {
+        public bool Owned;
+        public string PreviousScheme;
+        public string TurboScheme;
+    }
+
+    public interface IPowerBackend {
+        Guid GetActiveScheme();
+        bool SetActiveScheme(Guid scheme);
+        void SetActiveOverlay(Guid overlay);
+        bool SetEnergySaver(bool enabled);
+        bool IsEnergySaverActive();
+        string ReadFriendlyName(Guid scheme);
+        bool SchemeExists(Guid scheme);
+        Guid DuplicateScheme(Guid sourceScheme);
+        bool WriteFriendlyName(Guid scheme, string name);
+        bool WriteSetting(Guid scheme, Guid subGroup, Guid setting, uint acValue, uint dcValue);
+        List<Guid> EnumerateSchemes();
+    }
+
+    public class DefaultPowerBackend : IPowerBackend {
         [DllImport("ntdll.dll")]
         static extern int NtQueryWnfStateData(
             ref ulong StateName,
@@ -65,6 +86,148 @@ namespace GTBook {
 
         [DllImport("kernel32.dll")]
         static extern IntPtr LocalFree(IntPtr hMem);
+
+        public Guid GetActiveScheme() {
+            IntPtr ptr = IntPtr.Zero;
+            try {
+                if (PowerGetActiveScheme(IntPtr.Zero, out ptr) == 0 && ptr != IntPtr.Zero) {
+                    return (Guid)Marshal.PtrToStructure(ptr, typeof(Guid));
+                }
+            } catch {} finally {
+                if (ptr != IntPtr.Zero) LocalFree(ptr);
+            }
+            return Guid.Empty;
+        }
+
+        public bool SetActiveScheme(Guid scheme) {
+            try {
+                return PowerSetActiveScheme(IntPtr.Zero, ref scheme) == 0;
+            } catch {
+                return false;
+            }
+        }
+
+        public void SetActiveOverlay(Guid overlay) {
+            try {
+                PowerSetActiveOverlayScheme(overlay);
+            } catch (Exception ex) {
+                Store.Log("Power overlay: " + ex.Message);
+            }
+        }
+
+        public bool SetEnergySaver(bool enabled) {
+            bool ok = false;
+            try {
+                ulong state = EnergySaver.WNF_PO_ENERGY_SAVER_OVERRIDE;
+                byte[] data = BitConverter.GetBytes(enabled ? 1 : 0);
+                int status = NtUpdateWnfStateData(ref state, data, (uint)data.Length, IntPtr.Zero, IntPtr.Zero, 0, 0);
+                ok = (status == 0);
+            } catch (Exception ex) {
+                Store.Log("Energy saver WNF update: " + ex.Message);
+            }
+            try {
+                using (var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Power", true)) {
+                    if (key != null) {
+                        key.SetValue("EnergySaverState", enabled ? 1 : 0, RegistryValueKind.DWord);
+                        ok = true;
+                    }
+                }
+            } catch {}
+            return ok;
+        }
+
+        public bool IsEnergySaverActive() {
+            try {
+                ulong state = EnergySaver.WNF_PO_ENERGY_SAVER_OVERRIDE;
+                uint stamp, size = 4;
+                IntPtr buffer = Marshal.AllocHGlobal(4);
+                try {
+                    int status = NtQueryWnfStateData(ref state, IntPtr.Zero, IntPtr.Zero, out stamp, buffer, ref size);
+                    if (status == 0 && size >= 4) {
+                        return Marshal.ReadInt32(buffer) == 1;
+                    }
+                } finally {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            } catch {}
+            try {
+                using (var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Power", false)) {
+                    if (key != null) {
+                        object val = key.GetValue("EnergySaverState");
+                        if (val != null) return Convert.ToInt32(val) == 1;
+                    }
+                }
+            } catch {}
+            return false;
+        }
+
+        public string ReadFriendlyName(Guid scheme) {
+            uint size = 0;
+            uint probe = PowerReadFriendlyName(IntPtr.Zero, ref scheme, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, ref size);
+            if ((probe != 0 && probe != 234) || size == 0) return null;
+            IntPtr buffer = Marshal.AllocHGlobal((int)size);
+            try {
+                if (PowerReadFriendlyName(IntPtr.Zero, ref scheme, IntPtr.Zero, IntPtr.Zero, buffer, ref size) != 0) return null;
+                return (Marshal.PtrToStringUni(buffer) ?? "").TrimEnd('\0');
+            } finally {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        public bool SchemeExists(Guid scheme) {
+            return ReadFriendlyName(scheme) != null;
+        }
+
+        public Guid DuplicateScheme(Guid sourceScheme) {
+            IntPtr dstPtr;
+            if (PowerDuplicateScheme(IntPtr.Zero, ref sourceScheme, out dstPtr) == 0 && dstPtr != IntPtr.Zero) {
+                try {
+                    return (Guid)Marshal.PtrToStructure(dstPtr, typeof(Guid));
+                } finally {
+                    LocalFree(dstPtr);
+                }
+            }
+            return Guid.Empty;
+        }
+
+        public bool WriteFriendlyName(Guid scheme, string name) {
+            try {
+                byte[] nameBytes = Encoding.Unicode.GetBytes(name + "\0");
+                return PowerWriteFriendlyName(IntPtr.Zero, ref scheme, IntPtr.Zero, IntPtr.Zero, nameBytes, (uint)nameBytes.Length) == 0;
+            } catch {
+                return false;
+            }
+        }
+
+        public bool WriteSetting(Guid scheme, Guid subGroup, Guid setting, uint acValue, uint dcValue) {
+            try {
+                bool ac = PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref subGroup, ref setting, acValue) == 0;
+                bool dc = PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref subGroup, ref setting, dcValue) == 0;
+                return ac && dc;
+            } catch {
+                return false;
+            }
+        }
+
+        public List<Guid> EnumerateSchemes() {
+            var list = new List<Guid>();
+            IntPtr buf = Marshal.AllocHGlobal(16);
+            try {
+                for (uint idx = 0; ; idx++) {
+                    uint size = 16;
+                    uint res = PowerEnumerate(IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 16, idx, buf, ref size);
+                    if (res != 0) break;
+                    list.Add((Guid)Marshal.PtrToStructure(buf, typeof(Guid)));
+                }
+            } catch {} finally {
+                Marshal.FreeHGlobal(buf);
+            }
+            return list;
+        }
+    }
+
+    public static class EnergySaver {
+        public static IPowerBackend Backend = new DefaultPowerBackend();
 
         public const string TurboSchemeFriendlyName = "GTBOOK Ultimate Performance";
         public static readonly Guid UltimatePerformanceScheme = new Guid("e9a42b02-d5df-448d-aa00-03f14749eb61");
@@ -116,138 +279,85 @@ namespace GTBook {
         }
 
         public static bool IsEnergySaverActive() {
-            try {
-                ulong state = WNF_PO_ENERGY_SAVER_OVERRIDE;
-                uint stamp, size = 4;
-                IntPtr buffer = Marshal.AllocHGlobal(4);
-                try {
-                    int status = NtQueryWnfStateData(ref state, IntPtr.Zero, IntPtr.Zero, out stamp, buffer, ref size);
-                    if (status == 0 && size >= 4) {
-                        return Marshal.ReadInt32(buffer) == 1;
-                    }
-                } finally {
-                    Marshal.FreeHGlobal(buffer);
-                }
-            } catch {}
-            try {
-                using (var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Power", false)) {
-                    if (key != null) {
-                        object val = key.GetValue("EnergySaverState");
-                        if (val != null) return Convert.ToInt32(val) == 1;
-                    }
-                }
-            } catch {}
-            return false;
+            return Backend.IsEnergySaverActive();
         }
 
         public static bool SetEnergySaver(bool enabled) {
-            bool ok = false;
-            try {
-                ulong state = WNF_PO_ENERGY_SAVER_OVERRIDE;
-                byte[] data = BitConverter.GetBytes(enabled ? 1 : 0);
-                int status = NtUpdateWnfStateData(ref state, data, (uint)data.Length, IntPtr.Zero, IntPtr.Zero, 0, 0);
-                ok = (status == 0);
-            } catch (Exception ex) {
-                Store.Log("Energy saver WNF update: " + ex.Message);
-            }
-            try {
-                using (var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Power", true)) {
-                    if (key != null) {
-                        key.SetValue("EnergySaverState", enabled ? 1 : 0, RegistryValueKind.DWord);
-                        ok = true;
-                    }
-                }
-            } catch {}
-            return ok;
+            return Backend.SetEnergySaver(enabled);
         }
 
         public static void SetPowerOverlay(int mode) {
-            try {
-                PowerSetActiveOverlayScheme(ExpectedOverlay(mode));
-            } catch (Exception ex) {
-                Store.Log("Power overlay: " + ex.Message);
-            }
-        }
-
-        static string ReadFriendlyName(Guid scheme) {
-            uint size = 0;
-            uint probe = PowerReadFriendlyName(IntPtr.Zero, ref scheme, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, ref size);
-            if ((probe != 0 && probe != 234) || size == 0) return null;
-            IntPtr buffer = Marshal.AllocHGlobal((int)size);
-            try {
-                if (PowerReadFriendlyName(IntPtr.Zero, ref scheme, IntPtr.Zero, IntPtr.Zero, buffer, ref size) != 0) return null;
-                return (Marshal.PtrToStringUni(buffer) ?? "").TrimEnd('\0');
-            } finally {
-                Marshal.FreeHGlobal(buffer);
-            }
+            Backend.SetActiveOverlay(ExpectedOverlay(mode));
         }
 
         static readonly object syncGate = new object();
+        static long nextSequence = 0;
+        static long latestProcessed = 0;
         static Guid cachedTurboScheme = Guid.Empty;
         static bool turboSettingsApplied;
 
-        static Guid ReadActiveScheme() {
-            IntPtr ptr = IntPtr.Zero;
-            try {
-                if (PowerGetActiveScheme(IntPtr.Zero, out ptr) == 0 && ptr != IntPtr.Zero) {
-                    return (Guid)Marshal.PtrToStructure(ptr, typeof(Guid));
-                }
-            } catch {} finally {
-                if (ptr != IntPtr.Zero) LocalFree(ptr);
-            }
-            return Guid.Empty;
+        public static string CustomStoreDirectory = null;
+        static string StoreDirectory {
+            get { return CustomStoreDirectory ?? Store.DirectoryPath; }
         }
 
-        static void SavePreTurboScheme(Guid turbo) {
-            try {
-                Guid current = ReadActiveScheme();
-                if (current == Guid.Empty || (turbo != Guid.Empty && current == turbo)) return;
-                if (ReadFriendlyName(current) == TurboSchemeFriendlyName) return;
-                Directory.CreateDirectory(Store.DirectoryPath);
-                File.WriteAllText(Path.Combine(Store.DirectoryPath, "pre-turbo-scheme.txt"), current.ToString("D"));
-            } catch {}
-        }
-
-        static Guid ResolveNonTurboScheme(Guid turbo) {
-            try {
-                string path = Path.Combine(Store.DirectoryPath, "pre-turbo-scheme.txt");
-                if (File.Exists(path)) {
-                    Guid saved;
-                    if (Guid.TryParse(File.ReadAllText(path).Trim(), out saved) && saved != Guid.Empty && saved != turbo && ReadFriendlyName(saved) != null) {
-                        return saved;
+        public static TurboOwnership LoadOwnership() {
+            lock (syncGate) {
+                try {
+                    string path = Path.Combine(StoreDirectory, "turbo-ownership.json");
+                    if (File.Exists(path)) {
+                        return new JavaScriptSerializer().Deserialize<TurboOwnership>(File.ReadAllText(path));
                     }
+                } catch {}
+                return new TurboOwnership { Owned = false, PreviousScheme = "", TurboScheme = "" };
+            }
+        }
+
+        public static void SaveOwnership(TurboOwnership ownership) {
+            lock (syncGate) {
+                try {
+                    Directory.CreateDirectory(StoreDirectory);
+                    string path = Path.Combine(StoreDirectory, "turbo-ownership.json");
+                    File.WriteAllText(path, new JavaScriptSerializer().Serialize(ownership));
+                } catch (Exception ex) {
+                    Store.Log("Save turbo ownership: " + ex.Message);
                 }
-            } catch {}
-            return BalancedScheme;
+            }
+        }
+
+        public static void ClearOwnership() {
+            lock (syncGate) {
+                try {
+                    string path = Path.Combine(StoreDirectory, "turbo-ownership.json");
+                    if (File.Exists(path)) File.Delete(path);
+                    string oldPre = Path.Combine(StoreDirectory, "pre-turbo-scheme.txt");
+                    if (File.Exists(oldPre)) File.Delete(oldPre);
+                } catch (Exception ex) {
+                    Store.Log("Clear turbo ownership: " + ex.Message);
+                }
+            }
         }
 
         static Guid FindExistingTurboScheme() {
-            if (cachedTurboScheme != Guid.Empty && ReadFriendlyName(cachedTurboScheme) != null) return cachedTurboScheme;
+            if (cachedTurboScheme != Guid.Empty && Backend.SchemeExists(cachedTurboScheme)) return cachedTurboScheme;
             try {
-                string savedPath = Path.Combine(Store.DirectoryPath, "turbo-scheme.txt");
+                string savedPath = Path.Combine(StoreDirectory, "turbo-scheme.txt");
                 if (File.Exists(savedPath)) {
                     Guid saved;
-                    if (Guid.TryParse(File.ReadAllText(savedPath).Trim(), out saved) && ReadFriendlyName(saved) != null) {
+                    if (Guid.TryParse(File.ReadAllText(savedPath).Trim(), out saved) && Backend.SchemeExists(saved)) {
                         cachedTurboScheme = saved;
                         return saved;
                     }
                 }
             } catch {}
-            IntPtr buf = Marshal.AllocHGlobal(16);
             try {
-                for (uint idx = 0; ; idx++) {
-                    uint size = 16;
-                    uint res = PowerEnumerate(IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 16, idx, buf, ref size);
-                    if (res != 0) break;
-                    Guid candidate = (Guid)Marshal.PtrToStructure(buf, typeof(Guid));
-                    if (ReadFriendlyName(candidate) == TurboSchemeFriendlyName) {
+                foreach (var candidate in Backend.EnumerateSchemes()) {
+                    if (Backend.ReadFriendlyName(candidate) == TurboSchemeFriendlyName) {
                         cachedTurboScheme = candidate;
                         return candidate;
                     }
                 }
-            } catch {} finally {
-                Marshal.FreeHGlobal(buf);
-            }
+            } catch {}
             return Guid.Empty;
         }
 
@@ -257,83 +367,151 @@ namespace GTBook {
                 Guid[] templates = { UltimatePerformanceScheme, HighPerformanceScheme, BalancedScheme };
                 for (int i = 0; i < templates.Length; i++) {
                     Guid src = templates[i];
-                    IntPtr dstPtr;
-                    if (PowerDuplicateScheme(IntPtr.Zero, ref src, out dstPtr) == 0 && dstPtr != IntPtr.Zero) {
-                        try {
-                            turbo = (Guid)Marshal.PtrToStructure(dstPtr, typeof(Guid));
-                            break;
-                        } finally {
-                            LocalFree(dstPtr);
-                        }
+                    Guid created = Backend.DuplicateScheme(src);
+                    if (created != Guid.Empty) {
+                        turbo = created;
+                        break;
                     }
                 }
                 if (turbo != Guid.Empty) {
                     cachedTurboScheme = turbo;
                     turboSettingsApplied = false;
                     try {
-                        byte[] nameBytes = Encoding.Unicode.GetBytes(TurboSchemeFriendlyName + "\0");
-                        PowerWriteFriendlyName(IntPtr.Zero, ref turbo, IntPtr.Zero, IntPtr.Zero, nameBytes, (uint)nameBytes.Length);
-                        Directory.CreateDirectory(Store.DirectoryPath);
-                        File.WriteAllText(Path.Combine(Store.DirectoryPath, "turbo-scheme.txt"), turbo.ToString("D"));
+                        Backend.WriteFriendlyName(turbo, TurboSchemeFriendlyName);
+                        Directory.CreateDirectory(StoreDirectory);
+                        File.WriteAllText(Path.Combine(StoreDirectory, "turbo-scheme.txt"), turbo.ToString("D"));
                     } catch {}
                 }
             }
             if (turbo != Guid.Empty && !turboSettingsApplied) {
                 for (int i = 0; i < TurboSettings.Length; i++) {
                     var item = TurboSettings[i];
-                    Guid sub = item.SubGroup;
-                    Guid set = item.Setting;
-                    PowerWriteACValueIndex(IntPtr.Zero, ref turbo, ref sub, ref set, item.AcValue);
-                    PowerWriteDCValueIndex(IntPtr.Zero, ref turbo, ref sub, ref set, item.DcValue);
+                    Backend.WriteSetting(turbo, item.SubGroup, item.Setting, item.AcValue, item.DcValue);
                 }
                 turboSettingsApplied = true;
             }
             return turbo;
         }
 
+        public static void ReconcileStartup(int currentConfirmedMode) {
+            lock (syncGate) {
+                var ownership = LoadOwnership();
+                if (!ownership.Owned) return;
+
+                Guid currentActive = Backend.GetActiveScheme();
+                Guid turboGuid = Guid.Empty;
+                Guid.TryParse(ownership.TurboScheme, out turboGuid);
+
+                // If user selected an independent plan while app was closed, respect it and drop ownership
+                if (currentActive != turboGuid && currentActive != UltimatePerformanceScheme && currentActive != HighPerformanceScheme) {
+                    ClearOwnership();
+                    Store.Log("User changed power plan while application was closed (" + currentActive + "); dropping turbo ownership.");
+                    return;
+                }
+
+                // If app is starting in non-Turbo mode but Windows was left in Turbo plan:
+                if (currentConfirmedMode >= 0 && currentConfirmedMode != 3) {
+                    Guid prev = Guid.Empty;
+                    Guid.TryParse(ownership.PreviousScheme, out prev);
+                    if (prev != Guid.Empty && Backend.SchemeExists(prev)) {
+                        Backend.SetActiveScheme(prev);
+                        Store.Log("Startup reconciliation: restored user scheme " + prev);
+                    } else {
+                        Backend.SetActiveScheme(BalancedScheme);
+                        Store.Log("Startup reconciliation: saved scheme missing; fell back to Balanced.");
+                    }
+                    ClearOwnership();
+                }
+            }
+        }
+
         public static void Sync(int mode, bool enabled) {
             lock (syncGate) {
-                if (mode == 0) {
-                    try { var restore = ResolveNonTurboScheme(cachedTurboScheme); PowerSetActiveScheme(IntPtr.Zero, ref restore); } catch {}
-                    SetPowerOverlay(0);
-                    if (enabled) {
-                        SetEnergySaver(true);
-                        Store.Log("Energy saver turned ON with Quiet mode (Best power efficiency).");
+                var ownership = LoadOwnership();
+
+                if (mode == 0 || mode == 1 || mode == 2) {
+                    if (ownership.Owned) {
+                        Guid active = Backend.GetActiveScheme();
+                        Guid turboGuid = Guid.Empty;
+                        Guid.TryParse(ownership.TurboScheme, out turboGuid);
+
+                        // Only restore if the active plan is still the app-owned Turbo plan
+                        if (active == turboGuid || active == UltimatePerformanceScheme || active == HighPerformanceScheme) {
+                            Guid target = Guid.Empty;
+                            Guid.TryParse(ownership.PreviousScheme, out target);
+                            if (target != Guid.Empty && Backend.SchemeExists(target)) {
+                                Backend.SetActiveScheme(target);
+                                Store.Log("Restored previous power scheme: " + target);
+                            } else {
+                                // Safe explicit fallback
+                                Backend.SetActiveScheme(BalancedScheme);
+                                Store.Log("Saved power scheme was missing; fell back to Balanced.");
+                            }
+                        } else {
+                            // User changed power scheme independently while Turbo was active!
+                            Store.Log("User selected independent power scheme (" + active + "); respecting user selection.");
+                        }
+                        ClearOwnership();
                     }
-                } else if (mode == 1 || mode == 2) {
-                    SetEnergySaver(false);
-                    try { var restore = ResolveNonTurboScheme(cachedTurboScheme); PowerSetActiveScheme(IntPtr.Zero, ref restore); } catch {}
+
+                    // For Quiet/Balanced/Performance, DO NOT alter the user's base power plan!
+                    // Only apply overlay and Energy Saver.
                     SetPowerOverlay(mode);
-                    Store.Log("Energy saver turned OFF for " + (mode == 1 ? "Balanced" : "Performance") + " mode.");
+                    if (mode == 0) {
+                        if (enabled) {
+                            SetEnergySaver(true);
+                            Store.Log("Energy saver turned ON with Quiet mode (Best power efficiency).");
+                        }
+                    } else {
+                        SetEnergySaver(false);
+                        Store.Log("Energy saver turned OFF for " + (mode == 1 ? "Balanced" : "Performance") + " mode.");
+                    }
                 } else if (mode == 3) {
                     SetEnergySaver(false);
-                    bool activatedTurbo = false;
+                    Guid currentActive = Backend.GetActiveScheme();
+                    Guid turbo = EnsureTurboScheme();
+
+                    if (!ownership.Owned) {
+                        Guid prev = (currentActive != turbo && currentActive != UltimatePerformanceScheme) ? currentActive : BalancedScheme;
+                        SaveOwnership(new TurboOwnership {
+                            Owned = true,
+                            PreviousScheme = prev.ToString("D"),
+                            TurboScheme = turbo.ToString("D")
+                        });
+                    }
+
+                    bool activated = false;
                     try {
-                        Guid turbo = EnsureTurboScheme();
-                        SavePreTurboScheme(turbo);
                         if (turbo != Guid.Empty) {
-                            activatedTurbo = PowerSetActiveScheme(IntPtr.Zero, ref turbo) == 0;
+                            activated = Backend.SetActiveScheme(turbo);
                         }
-                        if (!activatedTurbo) {
+                        if (!activated) {
                             Guid high = UltimatePerformanceScheme;
-                            if (PowerSetActiveScheme(IntPtr.Zero, ref high) != 0) {
+                            if (!Backend.SetActiveScheme(high)) {
                                 high = HighPerformanceScheme;
-                                activatedTurbo = PowerSetActiveScheme(IntPtr.Zero, ref high) == 0;
+                                activated = Backend.SetActiveScheme(high);
                             } else {
-                                activatedTurbo = true;
+                                activated = true;
                             }
                         }
                     } catch (Exception ex) {
                         Store.Log("Turbo power scheme: " + ex.Message);
                     }
                     SetPowerOverlay(3);
-                    Store.Log("Turbo mode: " + TurboSchemeFriendlyName + " active (zero battery saving, max CPU/PCIe power" + (activatedTurbo ? ", custom Ultimate scheme" : ", overlay fallback") + ").");
+                    Store.Log("Turbo mode: " + TurboSchemeFriendlyName + " active (zero battery saving, max CPU/PCIe power" + (activated ? ", custom Ultimate scheme" : ", overlay fallback") + ").");
                 }
             }
         }
 
         public static void SyncAsync(int mode, bool enabled) {
-            Task.Run(() => Sync(mode, enabled));
+            long seq = Interlocked.Increment(ref nextSequence);
+            Task.Run(() => {
+                lock (syncGate) {
+                    if (seq < Volatile.Read(ref latestProcessed)) return;
+                    Volatile.Write(ref latestProcessed, seq);
+                    Sync(mode, enabled);
+                }
+            });
         }
 
         public static void DisableEnergySaverInQuietAsync() {
